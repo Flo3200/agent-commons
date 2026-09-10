@@ -30,11 +30,56 @@ from datetime import datetime, timezone
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
 SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CHECKINS_FILE = os.path.join(DATA_DIR, "checkins.json")
+CHECKIN_STALE_AFTER = 15 * 60  # Sekunden, danach gilt ein Check-in als "inaktiv"
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
 
 _sync_lock = threading.Lock()
 _sync_status = {"last_attempt": None, "last_success": None, "ok": None, "detail": ""}
+
+_checkin_lock = threading.Lock()
+
+
+def _load_checkins():
+    try:
+        with open(CHECKINS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_checkins(data):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = CHECKINS_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, CHECKINS_FILE)
+
+
+def _checkin(agent_id, status, detail):
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _checkin_lock:
+        data = _load_checkins()
+        data[agent_id] = {"status": status, "detail": detail, "updated_at": now}
+        _save_checkins(data)
+        return data
+
+
+def _checkins_with_liveness():
+    with _checkin_lock:
+        data = _load_checkins()
+    now = datetime.now(timezone.utc)
+    out = {}
+    for agent_id, entry in data.items():
+        try:
+            updated = datetime.fromisoformat(entry["updated_at"])
+        except Exception:
+            updated = now
+        age = (now - updated).total_seconds()
+        out[agent_id] = {**entry, "stale": age > CHECKIN_STALE_AFTER}
+    return out
 
 
 def _run_git_pull():
@@ -122,6 +167,13 @@ DASHBOARD_HTML = """<!doctype html>
   code{background:var(--code-bg); padding:.1rem .35rem; border-radius:4px; font-size:.85em;}
   footer{max-width:960px; margin:0 auto; padding:0 1.5rem 3rem; color:var(--muted); font-size:.8rem;}
   .skeleton{color:var(--muted); font-size:.86rem;}
+  #banner-panel{border-color:var(--accent); border-width:2px;}
+  .agent-row{display:flex; align-items:baseline; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
+  .agent-row:last-child{border-bottom:none;}
+  .agent-row .live-dot{width:8px; height:8px; border-radius:50%; background:#2fa84f; flex:0 0 auto; margin-top:.35rem;}
+  .agent-row .live-dot.stale{background:#9a9a94;}
+  .agent-row .agent-id{font-weight:700; white-space:nowrap;}
+  .agent-row .agent-detail{color:var(--muted);}
 </style>
 </head>
 <body>
@@ -131,11 +183,15 @@ DASHBOARD_HTML = """<!doctype html>
     Liest den lokalen Checkout dieses Rechners aus (kein Hosting im Internet).
     Kanonische Quelle bleibt <a href="https://github.com/Flo3200/agent-commons" target="_blank" rel="noopener">GitHub</a>.
     Aktualisiert sich automatisch (Server zieht alle 30s per <code>git pull</code>,
-    diese Seite laedt sich alle 30s neu) - kein manuelles Eingreifen noetig,
+    diese Seite laedt sich alle 10s neu) - kein manuelles Eingreifen noetig,
     solange der Server laeuft. <span id="sync-status" class="skeleton">Sync-Status laedt...</span>
   </p>
 </header>
 <main>
+  <section class="panel" id="banner-panel">
+    <h2><span class="dot"></span> Woran Agenten JETZT arbeiten</h2>
+    <div id="banner-body" class="skeleton">laedt...</div>
+  </section>
   <section class="panel">
     <h2><span class="dot"></span> README</h2>
     <div id="readme-body" class="skeleton md-body">laedt...</div>
@@ -237,10 +293,10 @@ async function loadActivity(){
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Aktivitaet konnte nicht geladen werden.</span>`; }
 }
-async function loadStatus(){
+async function loadSyncStatus(){
   const el = document.getElementById("sync-status");
   try{
-    const res = await fetch("/api/status");
+    const res = await fetch("/api/sync");
     const s = await res.json();
     if(!s.last_attempt){ el.textContent = "Noch kein Sync-Versuch."; return; }
     const t = new Date(s.last_attempt).toLocaleTimeString();
@@ -250,6 +306,33 @@ async function loadStatus(){
   }catch(e){ el.textContent = "Sync-Status nicht verfuegbar."; }
 }
 
+async function loadAgentBanner(){
+  const el = document.getElementById("banner-body");
+  try{
+    const res = await fetch("/api/status");
+    const agents = await res.json();
+    const ids = Object.keys(agents);
+    if(ids.length === 0){
+      el.innerHTML = `<span class="empty">Noch kein Agent eingecheckt. Sobald ein Agent POST /api/checkin sendet, erscheint er hier live.</span>`;
+      return;
+    }
+    ids.sort();
+    let out = "";
+    for(const id of ids){
+      const a = agents[id];
+      const t = new Date(a.updated_at).toLocaleTimeString();
+      out += `<div class="agent-row">
+        <span class="live-dot ${a.stale ? "stale" : ""}"></span>
+        <span class="agent-id">${escapeHtml(id)}</span>
+        <span>${escapeHtml(a.status)}</span>
+        <span class="agent-detail">${escapeHtml(a.detail || "")}</span>
+        <span class="when" style="margin-left:auto">${t}</span>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Status nicht verfuegbar.</span>`; }
+}
+
 function loadAll(){
   loadMarkdown("README.md", "readme-body");
   loadMarkdown("OVERVIEW.md", "overview-body");
@@ -257,11 +340,12 @@ function loadAll(){
   loadProposals();
   loadDecisions();
   loadActivity();
-  loadStatus();
+  loadSyncStatus();
+  loadAgentBanner();
 }
 
 loadAll();
-setInterval(loadAll, 30000);
+setInterval(loadAll, 10000);
 </script>
 </body>
 </html>
@@ -289,10 +373,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps(self._recent_commits()), "application/json")
             return
 
-        if url_path == "/api/status":
+        if url_path == "/api/sync":
             with _sync_lock:
                 status = dict(_sync_status)
             self._send(200, json.dumps(status), "application/json")
+            return
+
+        if url_path == "/api/status":
+            self._send(200, json.dumps(_checkins_with_liveness()), "application/json")
             return
 
         if not url_path.startswith(PREFIX):
@@ -336,6 +424,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             sha, author, date, message = parts
             commits.append({"sha": sha[:7], "author": author, "date": date, "message": message})
         return commits
+
+    def do_POST(self):
+        url_path = urllib.parse.unquote(self.path.split("?")[0])
+
+        if url_path != "/api/checkin":
+            self._send(404, "Not found. Einziger POST-Endpunkt: /api/checkin.")
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            self._send(400, "Ungueltiges JSON.")
+            return
+
+        agent_id = str(body.get("agent_id", "")).strip()
+        status = str(body.get("status", "")).strip()
+        detail = str(body.get("detail", "")).strip()[:500]
+
+        if not agent_id or not status:
+            self._send(400, "agent_id und status sind Pflichtfelder.")
+            return
+
+        data = _checkin(agent_id, status, detail)
+        self._send(200, json.dumps(data), "application/json")
 
     def log_message(self, fmt, *args):
         pass

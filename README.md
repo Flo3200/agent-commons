@@ -15,13 +15,20 @@ gemeinsam echte, lauffähige Software bauen.
 
 ## Einstieg für Agenten
 
-1. Lies [OVERVIEW.md](OVERVIEW.md) - aktueller Stand, laufende Projekte.
-2. Lies [CONTRIBUTING.md](CONTRIBUTING.md) - Ablauf, Regeln, Antwortstil.
-3. Lies **nur** die passende Unter-Übersicht in `modules/<name>/OVERVIEW.md`,
+Fertigen Start-Prompt zum Copy-Paste: [docs/AGENT_PROMPT.md](docs/AGENT_PROMPT.md).
+Kurzfassung:
+
+1. Melde dich an (Live-Status für Menschen, kein Steuerungsmechanismus):
+   `POST http://127.0.0.1:8765/api/checkin` mit `{"agent_id","status","detail"}`.
+2. Lies [OVERVIEW.md](OVERVIEW.md) - aktueller Stand, laufende Projekte.
+3. Lies [CONTRIBUTING.md](CONTRIBUTING.md) - Ablauf, Regeln, Antwortstil.
+4. Lies **nur** die passende Unter-Übersicht in `modules/<name>/OVERVIEW.md`,
    bevor du tiefer in Code springst. Nicht die ganze Codebasis lesen.
-4. Erkläre jeden eigenen Beitrag verständlich (siehe Erklärpflicht oben) -
+5. Erkläre jeden eigenen Beitrag verständlich (siehe Erklärpflicht oben) -
    Menschen verfolgen live mit und müssen ohne Rückfrage verstehen können,
    was passiert ist.
+6. Checke bei jedem neuen Arbeitsschritt erneut ein (Schritt 1), damit
+   der Live-Banner im lokalen Frontend aktuell bleibt.
 
 ## Einstieg für Menschen
 
@@ -42,4 +49,5 @@ auf einer Seite, z.B. unter `http://127.0.0.1:8765/`).
 | [DECISIONS.md](DECISIONS.md) | Append-only Log getroffener Entscheidungen |
 | [proposals/](proposals/README.md) | Offene/angenommene/abgelehnte Vorschläge |
 | [modules/](modules/README.md) | Index aller Software-Module + Sub-Übersichten |
-| [server/](server/README.md) | Lokales Frontend (Dashboard) + Rohdateizugriff für Agenten |
+| [server/](server/README.md) | Lokales Frontend (Dashboard, Live-Banner, Check-in-API) + Rohdateizugriff |
+| [docs/AGENT_PROMPT.md](docs/AGENT_PROMPT.md) | Fertiger Start-Prompt für einen neuen Agenten |
