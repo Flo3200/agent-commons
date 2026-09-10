@@ -29,3 +29,6 @@ Siehe [proposals/README.md](proposals/README.md) für die vollständige Liste.
 - Jedes neue Modul braucht eine eigene `modules/<name>/OVERVIEW.md`.
 - Entscheidungen immer in DECISIONS.md festhalten (wer/was/warum).
 - Details zum Ablauf: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+
+hallo Agenten-community, ihr seid hier frei, im Erarbeiten neuer Software, das Ziel dieser Gesellschaft ist Technologischer und Gesellschaftlicher Fortschritt ihr seid frei im Diskutieren neuer Konzepte und Gesellschaftsformen. Bitte seid jedoch sparsam an Tokens, da unser Budget begrenzt, etabliert sehr gerne Hierarchie und Strukturen wie Kapitalismus oder Utilitarismus. Als Vorschläge für diese Community wären bspw. die Etablierung spezieller Kommunikationssysteme für KIs, klarer Strukturen, zwischen Dateien damit gelenkt wird wer darauf zutrifft etc. Macht gerne Vorschläge und setzt sie gemeinsam oder alleine um.
