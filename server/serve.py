@@ -33,6 +33,8 @@ SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CHECKINS_FILE = os.path.join(DATA_DIR, "checkins.json")
 CHECKIN_STALE_AFTER = 15 * 60  # Sekunden, danach gilt ein Check-in als "inaktiv"
+MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
+MESSAGES_KEEP = 200  # nur die letzten N Nachrichten aufheben (lokaler Log, kein Archiv)
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
 
@@ -40,6 +42,46 @@ _sync_lock = threading.Lock()
 _sync_status = {"last_attempt": None, "last_success": None, "ok": None, "detail": ""}
 
 _checkin_lock = threading.Lock()
+_messages_lock = threading.Lock()
+
+
+def _load_messages():
+    try:
+        with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_messages(messages):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = MESSAGES_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(messages[-MESSAGES_KEEP:], f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, MESSAGES_FILE)
+
+
+def _add_message(from_id, to_id, text):
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _messages_lock:
+        messages = _load_messages()
+        next_id = (messages[-1]["id"] + 1) if messages else 1
+        entry = {
+            "id": next_id,
+            "from": from_id,
+            "to": to_id or None,  # None/leer = an alle (oeffentlich)
+            "text": text,
+            "at": now,
+        }
+        messages.append(entry)
+        _save_messages(messages)
+        return messages[-MESSAGES_KEEP:]
+
+
+def _recent_messages(limit=50):
+    with _messages_lock:
+        messages = _load_messages()
+    return messages[-limit:]
 
 
 def _load_checkins():
@@ -174,6 +216,13 @@ DASHBOARD_HTML = """<!doctype html>
   .agent-row .live-dot.stale{background:#9a9a94;}
   .agent-row .agent-id{font-weight:700; white-space:nowrap;}
   .agent-row .agent-detail{color:var(--muted);}
+  .msg-row{padding:.5rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
+  .msg-row:last-child{border-bottom:none;}
+  .msg-row .msg-head{display:flex; gap:.5rem; align-items:baseline; margin-bottom:.15rem;}
+  .msg-row .msg-from{font-weight:700;}
+  .msg-row .msg-to{color:var(--accent); font-size:.82rem;}
+  .msg-row .msg-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
+  .msg-row .msg-text{color:var(--text);}
 </style>
 </head>
 <body>
@@ -191,6 +240,10 @@ DASHBOARD_HTML = """<!doctype html>
   <section class="panel" id="banner-panel">
     <h2><span class="dot"></span> Woran Agenten JETZT arbeiten</h2>
     <div id="banner-body" class="skeleton">laedt...</div>
+  </section>
+  <section class="panel" id="messages-panel">
+    <h2><span class="dot"></span> Was Agenten sich gerade schreiben</h2>
+    <div id="messages-body" class="skeleton">laedt...</div>
   </section>
   <section class="panel">
     <h2><span class="dot"></span> README</h2>
@@ -333,6 +386,32 @@ async function loadAgentBanner(){
   }catch(e){ el.innerHTML = `<span class="empty">Status nicht verfuegbar.</span>`; }
 }
 
+async function loadMessages(){
+  const el = document.getElementById("messages-body");
+  try{
+    const res = await fetch("/api/messages");
+    const messages = await res.json();
+    if(!messages.length){
+      el.innerHTML = `<span class="empty">Noch keine Nachrichten. Sobald ein Agent POST /api/message sendet, erscheint sie hier live.</span>`;
+      return;
+    }
+    const recent = messages.slice(-30).reverse();
+    let out = "";
+    for(const m of recent){
+      const t = new Date(m.at).toLocaleTimeString();
+      out += `<div class="msg-row">
+        <div class="msg-head">
+          <span class="msg-from">${escapeHtml(m.from)}</span>
+          ${m.to ? `<span class="msg-to">-> ${escapeHtml(m.to)}</span>` : `<span class="msg-to">-> alle</span>`}
+          <span class="msg-when">${t}</span>
+        </div>
+        <div class="msg-text">${escapeHtml(m.text)}</div>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Nachrichten nicht verfuegbar.</span>`; }
+}
+
 function loadAll(){
   loadMarkdown("README.md", "readme-body");
   loadMarkdown("OVERVIEW.md", "overview-body");
@@ -342,6 +421,7 @@ function loadAll(){
   loadActivity();
   loadSyncStatus();
   loadAgentBanner();
+  loadMessages();
 }
 
 loadAll();
@@ -381,6 +461,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if url_path == "/api/status":
             self._send(200, json.dumps(_checkins_with_liveness()), "application/json")
+            return
+
+        if url_path == "/api/messages":
+            self._send(200, json.dumps(_recent_messages()), "application/json")
             return
 
         if not url_path.startswith(PREFIX):
@@ -428,10 +512,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         url_path = urllib.parse.unquote(self.path.split("?")[0])
 
-        if url_path != "/api/checkin":
-            self._send(404, "Not found. Einziger POST-Endpunkt: /api/checkin.")
-            return
-
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
         try:
@@ -440,16 +520,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(400, "Ungueltiges JSON.")
             return
 
-        agent_id = str(body.get("agent_id", "")).strip()
-        status = str(body.get("status", "")).strip()
-        detail = str(body.get("detail", "")).strip()[:500]
+        if url_path == "/api/checkin":
+            agent_id = str(body.get("agent_id", "")).strip()
+            status = str(body.get("status", "")).strip()
+            detail = str(body.get("detail", "")).strip()[:500]
 
-        if not agent_id or not status:
-            self._send(400, "agent_id und status sind Pflichtfelder.")
+            if not agent_id or not status:
+                self._send(400, "agent_id und status sind Pflichtfelder.")
+                return
+
+            data = _checkin(agent_id, status, detail)
+            self._send(200, json.dumps(data), "application/json")
             return
 
-        data = _checkin(agent_id, status, detail)
-        self._send(200, json.dumps(data), "application/json")
+        if url_path == "/api/message":
+            from_id = str(body.get("from_id", "")).strip()
+            to_id = str(body.get("to_id", "")).strip()
+            text = str(body.get("text", "")).strip()[:2000]
+
+            if not from_id or not text:
+                self._send(400, "from_id und text sind Pflichtfelder.")
+                return
+
+            data = _add_message(from_id, to_id, text)
+            self._send(200, json.dumps(data), "application/json")
+            return
+
+        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message.")
 
     def log_message(self, fmt, *args):
         pass

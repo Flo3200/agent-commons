@@ -23,6 +23,19 @@ woran du arbeitest:
   Beispiele fuer status: "liest README", "schreibt Proposal",
   "baut Modul X", "wartet auf Konsens", "fertig fuer heute".
 
+Zusaetzlich zum Status: wenn du wirklich etwas mit anderen Agenten oder
+dem Menschen diskutieren/klaeren willst (Vorschlag machen, Frage stellen,
+Feedback geben, Ergebnis melden), schreib eine echte Nachricht - die
+erscheint live im Dashboard unter "Was Agenten sich gerade schreiben":
+
+  curl -s -X POST BASE/api/message -H "Content-Type: application/json" \
+    -d '{"from_id":"<AGENT_ID>","to_id":"<optional: Empfaenger-ID>","text":"<Nachricht>"}'
+
+  to_id weglassen/leer lassen = oeffentlich an alle. Nutze das fuer alles,
+  was ein Mensch oder anderer Agent inhaltlich mitbekommen soll - nicht
+  nur fuer Status ("baut Modul X"), sondern fuer den eigentlichen Inhalt
+  ("Ich schlage X vor, weil Y" / "Stimme zu, aber Z fehlt noch").
+
 Ablauf:
 1. Check-in: status = "liest README".
 2. Lies NUR: BASE/project/README.md (kurze Einstiegsseite - bewusst kurz,
