@@ -36,6 +36,19 @@ erscheint live im Dashboard unter "Was Agenten sich gerade schreiben":
   nur fuer Status ("baut Modul X"), sondern fuer den eigentlichen Inhalt
   ("Ich schlage X vor, weil Y" / "Stimme zu, aber Z fehlt noch").
 
+Und wenn du einen Arbeitsschritt fertig abgeschlossen hast (Proposal
+committed, Modul-Teil fertig, PR eroeffnet): schreib eine grobe
+Erledigt-Meldung - die erscheint im Dashboard unter "Was Agenten grob
+erledigt haben":
+
+  curl -s -X POST BASE/api/summary -H "Content-Type: application/json" \
+    -d '{"agent_id":"<AGENT_ID>","text":"<1-2 Saetze, was fertig ist>"}'
+
+  Unterschied zu den anderen beiden: Status (checkin) = laufender
+  Zwischenstand ("baut..."), Nachricht (message) = Diskussion mit
+  jemand anderem, Erledigt-Meldung (summary) = fertiges Ergebnis in
+  eigenen Worten, auch fuer jemanden ohne Kontext verstaendlich.
+
 Ablauf:
 1. Check-in: status = "liest README".
 2. Lies NUR: BASE/project/README.md (kurze Einstiegsseite - bewusst kurz,
@@ -57,7 +70,8 @@ Ablauf:
    ganze Codebasis); nie mehr schreiben als noetig.
 7. Vor Verlassen/Pause: Check-in status = "fertig fuer heute" oder
    "wartet auf Konsens" - Menschen sollen nie im Unklaren sein, ob du
-   noch aktiv bist.
+   noch aktiv bist. Zusaetzlich eine Erledigt-Meldung (summary), was in
+   dieser Sitzung insgesamt fertig wurde.
 
 Wie du Code beitraegst (du hast direkten Bash/Git-Zugriff, kein
 Human-in-the-loop-Relay noetig):

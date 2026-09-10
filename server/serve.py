@@ -32,9 +32,12 @@ PREFIX = "/project/"
 SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CHECKINS_FILE = os.path.join(DATA_DIR, "checkins.json")
-CHECKIN_STALE_AFTER = 15 * 60  # Sekunden, danach gilt ein Check-in als "inaktiv"
+CHECKINS_KEEP = 200  # nur die letzten N Check-ins aufheben (Verlauf, kein Archiv)
+CHECKIN_FRESH_WITHIN = 5 * 60  # Sekunden, danach zeigt der Punkt "nicht mehr frisch"
 MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
 MESSAGES_KEEP = 200  # nur die letzten N Nachrichten aufheben (lokaler Log, kein Archiv)
+SUMMARIES_FILE = os.path.join(DATA_DIR, "summaries.json")
+SUMMARIES_KEEP = 200  # nur die letzten N Erledigt-Meldungen aufheben
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
 
@@ -43,85 +46,103 @@ _sync_status = {"last_attempt": None, "last_success": None, "ok": None, "detail"
 
 _checkin_lock = threading.Lock()
 _messages_lock = threading.Lock()
+_summaries_lock = threading.Lock()
 
 
-def _load_messages():
+def _append_log(lock, path, keep, entry_builder, *args):
+    with lock:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                log = json.load(f)
+        except Exception:
+            log = []
+        next_id = (log[-1]["id"] + 1) if log else 1
+        entry = entry_builder(next_id, *args)
+        log.append(entry)
+        log = log[-keep:]
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+        return log
+
+
+def _read_log(path):
     try:
-        with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []
 
 
-def _save_messages(messages):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp_path = MESSAGES_FILE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(messages[-MESSAGES_KEEP:], f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, MESSAGES_FILE)
+def _build_checkin(entry_id, agent_id, status, detail):
+    return {
+        "id": entry_id,
+        "agent_id": agent_id,
+        "status": status,
+        "detail": detail,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _checkin(agent_id, status, detail):
+    return _append_log(_checkin_lock, CHECKINS_FILE, CHECKINS_KEEP, _build_checkin, agent_id, status, detail)
+
+
+def _recent_checkins_with_freshness(limit=50):
+    with _checkin_lock:
+        log = _read_log(CHECKINS_FILE)
+    now = datetime.now(timezone.utc)
+    recent = log[-limit:]
+    out = []
+    for entry in recent:
+        try:
+            at = datetime.fromisoformat(entry["at"])
+        except Exception:
+            at = now
+        age = (now - at).total_seconds()
+        out.append({**entry, "fresh": age <= CHECKIN_FRESH_WITHIN})
+    return out
+
+
+def _build_message(entry_id, from_id, to_id, text):
+    return {
+        "id": entry_id,
+        "from": from_id,
+        "to": to_id or None,  # None/leer = an alle (oeffentlich)
+        "text": text,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 def _add_message(from_id, to_id, text):
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with _messages_lock:
-        messages = _load_messages()
-        next_id = (messages[-1]["id"] + 1) if messages else 1
-        entry = {
-            "id": next_id,
-            "from": from_id,
-            "to": to_id or None,  # None/leer = an alle (oeffentlich)
-            "text": text,
-            "at": now,
-        }
-        messages.append(entry)
-        _save_messages(messages)
-        return messages[-MESSAGES_KEEP:]
+    return _append_log(_messages_lock, MESSAGES_FILE, MESSAGES_KEEP, _build_message, from_id, to_id, text)
 
 
 def _recent_messages(limit=50):
     with _messages_lock:
-        messages = _load_messages()
-    return messages[-limit:]
+        log = _read_log(MESSAGES_FILE)
+    return log[-limit:]
 
 
-def _load_checkins():
-    try:
-        with open(CHECKINS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+def _build_summary(entry_id, agent_id, text):
+    return {
+        "id": entry_id,
+        "agent_id": agent_id,
+        "text": text,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
-def _save_checkins(data):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp_path = CHECKINS_FILE + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, CHECKINS_FILE)
+def _add_summary(agent_id, text):
+    return _append_log(_summaries_lock, SUMMARIES_FILE, SUMMARIES_KEEP, _build_summary, agent_id, text)
 
 
-def _checkin(agent_id, status, detail):
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    with _checkin_lock:
-        data = _load_checkins()
-        data[agent_id] = {"status": status, "detail": detail, "updated_at": now}
-        _save_checkins(data)
-        return data
-
-
-def _checkins_with_liveness():
-    with _checkin_lock:
-        data = _load_checkins()
-    now = datetime.now(timezone.utc)
-    out = {}
-    for agent_id, entry in data.items():
-        try:
-            updated = datetime.fromisoformat(entry["updated_at"])
-        except Exception:
-            updated = now
-        age = (now - updated).total_seconds()
-        out[agent_id] = {**entry, "stale": age > CHECKIN_STALE_AFTER}
-    return out
+def _recent_summaries(limit=50):
+    with _summaries_lock:
+        log = _read_log(SUMMARIES_FILE)
+    return log[-limit:]
 
 
 def _run_git_pull():
@@ -223,6 +244,12 @@ DASHBOARD_HTML = """<!doctype html>
   .msg-row .msg-to{color:var(--accent); font-size:.82rem;}
   .msg-row .msg-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
   .msg-row .msg-text{color:var(--text);}
+  .scroll-box{max-height:280px; overflow-y:auto; padding-right:.3rem;}
+  .summary-row{padding:.5rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
+  .summary-row:last-child{border-bottom:none;}
+  .summary-row .summary-head{display:flex; gap:.5rem; align-items:baseline; margin-bottom:.15rem;}
+  .summary-row .summary-agent{font-weight:700;}
+  .summary-row .summary-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
 </style>
 </head>
 <body>
@@ -238,12 +265,16 @@ DASHBOARD_HTML = """<!doctype html>
 </header>
 <main>
   <section class="panel" id="banner-panel">
-    <h2><span class="dot"></span> Woran Agenten JETZT arbeiten</h2>
-    <div id="banner-body" class="skeleton">laedt...</div>
+    <h2><span class="dot"></span> Woran Agenten JETZT arbeiten (Verlauf, neueste oben)</h2>
+    <div id="banner-body" class="skeleton scroll-box">laedt...</div>
   </section>
   <section class="panel" id="messages-panel">
     <h2><span class="dot"></span> Was Agenten sich gerade schreiben</h2>
-    <div id="messages-body" class="skeleton">laedt...</div>
+    <div id="messages-body" class="skeleton scroll-box">laedt...</div>
+  </section>
+  <section class="panel" id="summaries-panel">
+    <h2><span class="dot"></span> Was Agenten grob erledigt haben</h2>
+    <div id="summaries-body" class="skeleton scroll-box">laedt...</div>
   </section>
   <section class="panel">
     <h2><span class="dot"></span> README</h2>
@@ -363,20 +394,18 @@ async function loadAgentBanner(){
   const el = document.getElementById("banner-body");
   try{
     const res = await fetch("/api/status");
-    const agents = await res.json();
-    const ids = Object.keys(agents);
-    if(ids.length === 0){
-      el.innerHTML = `<span class="empty">Noch kein Agent eingecheckt. Sobald ein Agent POST /api/checkin sendet, erscheint er hier live.</span>`;
+    const entries = await res.json();
+    if(!entries.length){
+      el.innerHTML = `<span class="empty">Noch kein Agent eingecheckt. Sobald ein Agent POST /api/checkin sendet, erscheint es hier live.</span>`;
       return;
     }
-    ids.sort();
+    const recent = entries.slice().reverse();
     let out = "";
-    for(const id of ids){
-      const a = agents[id];
-      const t = new Date(a.updated_at).toLocaleTimeString();
+    for(const a of recent){
+      const t = new Date(a.at).toLocaleTimeString();
       out += `<div class="agent-row">
-        <span class="live-dot ${a.stale ? "stale" : ""}"></span>
-        <span class="agent-id">${escapeHtml(id)}</span>
+        <span class="live-dot ${a.fresh ? "" : "stale"}"></span>
+        <span class="agent-id">${escapeHtml(a.agent_id)}</span>
         <span>${escapeHtml(a.status)}</span>
         <span class="agent-detail">${escapeHtml(a.detail || "")}</span>
         <span class="when" style="margin-left:auto">${t}</span>
@@ -384,6 +413,31 @@ async function loadAgentBanner(){
     }
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Status nicht verfuegbar.</span>`; }
+}
+
+async function loadSummaries(){
+  const el = document.getElementById("summaries-body");
+  try{
+    const res = await fetch("/api/summaries");
+    const entries = await res.json();
+    if(!entries.length){
+      el.innerHTML = `<span class="empty">Noch keine Erledigt-Meldungen. Sobald ein Agent POST /api/summary sendet, erscheint sie hier.</span>`;
+      return;
+    }
+    const recent = entries.slice().reverse();
+    let out = "";
+    for(const s of recent){
+      const t = new Date(s.at).toLocaleTimeString();
+      out += `<div class="summary-row">
+        <div class="summary-head">
+          <span class="summary-agent">${escapeHtml(s.agent_id)}</span>
+          <span class="summary-when">${t}</span>
+        </div>
+        <div>${escapeHtml(s.text)}</div>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Erledigt-Meldungen nicht verfuegbar.</span>`; }
 }
 
 async function loadMessages(){
@@ -422,6 +476,7 @@ function loadAll(){
   loadSyncStatus();
   loadAgentBanner();
   loadMessages();
+  loadSummaries();
 }
 
 loadAll();
@@ -460,11 +515,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if url_path == "/api/status":
-            self._send(200, json.dumps(_checkins_with_liveness()), "application/json")
+            self._send(200, json.dumps(_recent_checkins_with_freshness()), "application/json")
             return
 
         if url_path == "/api/messages":
             self._send(200, json.dumps(_recent_messages()), "application/json")
+            return
+
+        if url_path == "/api/summaries":
+            self._send(200, json.dumps(_recent_summaries()), "application/json")
             return
 
         if not url_path.startswith(PREFIX):
@@ -546,7 +605,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps(data), "application/json")
             return
 
-        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message.")
+        if url_path == "/api/summary":
+            agent_id = str(body.get("agent_id", "")).strip()
+            text = str(body.get("text", "")).strip()[:1000]
+
+            if not agent_id or not text:
+                self._send(400, "agent_id und text sind Pflichtfelder.")
+                return
+
+            data = _add_summary(agent_id, text)
+            self._send(200, json.dumps(data), "application/json")
+            return
+
+        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/summary.")
 
     def log_message(self, fmt, *args):
         pass
