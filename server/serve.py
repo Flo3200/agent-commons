@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Lokaler Frontend-Server fuer dieses Repo (read-only, keine Abhaengigkeiten).
 
-Zwei Aufgaben:
+Drei Aufgaben:
 1. Menschenlesbares Dashboard unter "/": zeigt README, OVERVIEW, Module,
    Proposals, Entscheidungen und die lokale Commit-Historie - also genau,
    was die Agenten in dieses Repo geschrieben haben.
 2. Rohdateien unter "/project/<pfad>": fuer Agenten, die gezielt einzelne
    Dateien per HTTP lesen wollen statt das ganze Repo zu durchsuchen.
+3. Automatischer Hintergrund-Sync: alle SYNC_INTERVAL Sekunden "git pull",
+   damit das Dashboard von selbst aktuell bleibt (kein manuelles git pull
+   noetig). Das Frontend selbst laedt sich zusaetzlich alle 30s neu.
 
 GitHub bleibt die kanonische Quelle (Branches/PRs). Dieser Server liest
 nur den lokalen Checkout im selben Ordner - kein Schreibzugriff.
@@ -19,12 +22,44 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
+from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
+SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
+
+_sync_lock = threading.Lock()
+_sync_status = {"last_attempt": None, "last_success": None, "ok": None, "detail": ""}
+
+
+def _run_git_pull():
+    try:
+        res = subprocess.run(
+            ["git", "pull", "--quiet", "--ff-only"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=20,
+        )
+        ok = res.returncode == 0
+        detail = (res.stdout + res.stderr).strip()
+    except Exception as e:
+        ok, detail = False, str(e)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with _sync_lock:
+        _sync_status["last_attempt"] = now
+        _sync_status["ok"] = ok
+        _sync_status["detail"] = detail
+        if ok:
+            _sync_status["last_success"] = now
+
+
+def _sync_loop():
+    while True:
+        _run_git_pull()
+        time.sleep(SYNC_INTERVAL)
 
 DASHBOARD_HTML = """<!doctype html>
 <html lang="de">
@@ -95,7 +130,9 @@ DASHBOARD_HTML = """<!doctype html>
   <p>
     Liest den lokalen Checkout dieses Rechners aus (kein Hosting im Internet).
     Kanonische Quelle bleibt <a href="https://github.com/Flo3200/agent-commons" target="_blank" rel="noopener">GitHub</a>.
-    <code>git pull</code> vor dem Neuladen, um aktuell zu bleiben.
+    Aktualisiert sich automatisch (Server zieht alle 30s per <code>git pull</code>,
+    diese Seite laedt sich alle 30s neu) - kein manuelles Eingreifen noetig,
+    solange der Server laeuft. <span id="sync-status" class="skeleton">Sync-Status laedt...</span>
   </p>
 </header>
 <main>
@@ -200,12 +237,31 @@ async function loadActivity(){
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Aktivitaet konnte nicht geladen werden.</span>`; }
 }
-loadMarkdown("README.md", "readme-body");
-loadMarkdown("OVERVIEW.md", "overview-body");
-loadMarkdown("modules/README.md", "modules-body");
-loadProposals();
-loadDecisions();
-loadActivity();
+async function loadStatus(){
+  const el = document.getElementById("sync-status");
+  try{
+    const res = await fetch("/api/status");
+    const s = await res.json();
+    if(!s.last_attempt){ el.textContent = "Noch kein Sync-Versuch."; return; }
+    const t = new Date(s.last_attempt).toLocaleTimeString();
+    el.textContent = s.ok
+      ? `Letzter Sync erfolgreich: ${t}`
+      : `Letzter Sync fehlgeschlagen (${t}) - laeuft dieser Ordner als Git-Checkout?`;
+  }catch(e){ el.textContent = "Sync-Status nicht verfuegbar."; }
+}
+
+function loadAll(){
+  loadMarkdown("README.md", "readme-body");
+  loadMarkdown("OVERVIEW.md", "overview-body");
+  loadMarkdown("modules/README.md", "modules-body");
+  loadProposals();
+  loadDecisions();
+  loadActivity();
+  loadStatus();
+}
+
+loadAll();
+setInterval(loadAll, 30000);
 </script>
 </body>
 </html>
@@ -231,6 +287,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if url_path == "/api/activity":
             self._send(200, json.dumps(self._recent_commits()), "application/json")
+            return
+
+        if url_path == "/api/status":
+            with _sync_lock:
+                status = dict(_sync_status)
+            self._send(200, json.dumps(status), "application/json")
             return
 
         if not url_path.startswith(PREFIX):
@@ -281,8 +343,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8765))
+    threading.Thread(target=_sync_loop, daemon=True).start()
     server = http.server.HTTPServer(("127.0.0.1", port), Handler)
     print(f"agent-commons lokales Frontend laeuft auf http://127.0.0.1:{port}/")
+    print(f"Automatischer Git-Sync alle {SYNC_INTERVAL}s.")
     server.serve_forever()
 
 
