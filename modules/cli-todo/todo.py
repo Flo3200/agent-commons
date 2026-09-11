@@ -5,11 +5,31 @@ import sys
 from pathlib import Path
 
 STORE = Path(__file__).parent / "todos.json"
+PRIORITIES = ("low", "normal", "high")
+PRIORITY_ORDER = {"high": 0, "normal": 1, "low": 2}
+
+HELP = """Nutzung: todo.py <add|list|done|remove> [args]
+
+Befehle:
+  add <text> [-p low|normal|high]   Neues Todo anlegen (Standard: normal)
+  list                               Alle Todos anzeigen (nach Prioritaet sortiert)
+  done <id>                          Todo als erledigt markieren
+  remove <id>                        Todo loeschen
+
+Beispiele:
+  python3 todo.py add "Einkaufen" -p high
+  python3 todo.py list
+  python3 todo.py done 1
+  python3 todo.py remove 2
+"""
 
 
 def load():
     if STORE.exists():
-        return json.loads(STORE.read_text())
+        todos = json.loads(STORE.read_text())
+        for t in todos:
+            t.setdefault("priority", "normal")  # Migration alter Eintraege
+        return todos
     return []
 
 
@@ -17,14 +37,31 @@ def save(todos):
     STORE.write_text(json.dumps(todos, indent=2, ensure_ascii=False))
 
 
+def sorted_todos(todos):
+    return sorted(todos, key=lambda t: (t["done"], PRIORITY_ORDER.get(t.get("priority", "normal"), 1)))
+
+
 def cmd_add(args):
+    priority = "normal"
+    if "-p" in args:
+        idx = args.index("-p")
+        if idx + 1 >= len(args) or args[idx + 1] not in PRIORITIES:
+            print(f"Fehler: -p braucht einen Wert aus {PRIORITIES}.")
+            return 1
+        priority = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
     if not args:
         print("Fehler: Text fuer 'add' fehlt.")
         return 1
     todos = load()
-    todos.append({"id": (todos[-1]["id"] + 1 if todos else 1), "text": " ".join(args), "done": False})
+    todos.append({
+        "id": (todos[-1]["id"] + 1 if todos else 1),
+        "text": " ".join(args),
+        "done": False,
+        "priority": priority,
+    })
     save(todos)
-    print(f"Hinzugefuegt: #{todos[-1]['id']} {todos[-1]['text']}")
+    print(f"Hinzugefuegt: #{todos[-1]['id']} ({priority}) {todos[-1]['text']}")
     return 0
 
 
@@ -33,9 +70,9 @@ def cmd_list(args):
     if not todos:
         print("Keine Todos.")
         return 0
-    for t in todos:
+    for t in sorted_todos(todos):
         mark = "x" if t["done"] else " "
-        print(f"[{mark}] #{t['id']} {t['text']}")
+        print(f"[{mark}] #{t['id']} ({t.get('priority', 'normal')}) {t['text']}")
     return 0
 
 
@@ -72,9 +109,9 @@ COMMANDS = {"add": cmd_add, "list": cmd_list, "done": cmd_done, "remove": cmd_re
 
 
 def main(argv):
-    if not argv or argv[0] not in COMMANDS:
-        print("Nutzung: todo.py <add|list|done|remove> [args]")
-        return 1
+    if not argv or argv[0] in ("--help", "-h") or argv[0] not in COMMANDS:
+        print(HELP)
+        return 0 if argv and argv[0] in ("--help", "-h") else 1
     return COMMANDS[argv[0]](argv[1:])
 
 
