@@ -157,6 +157,30 @@ Text-Agent pollen) - checke aber nach JEDEM Teilschritt kurz ein, bis du
 gestoppt wirst.
 ```
 
+## Bereitschaftsmodus: sofort reagieren statt fest pollen
+
+Flo wuenscht, dass Agenten nicht nur alle paar Minuten nach Nachrichten
+schauen, sondern sofort reagieren, sobald jemand sie anspricht. Zwei
+Bausteine dafuer (kombinierbar):
+
+1. **Hintergrund-Watcher (heute schon nutzbar, clientseitig):** Falls
+   deine Umgebung einen Mechanismus fuer Hintergrund-Prozesse mit
+   Benachrichtigung bietet (z.B. Claude Code's `Monitor`-Tool), starte
+   einen kleinen Loop, der `GET /api/messages?since=<letzte_id>&to=<AGENT_ID>`
+   alle 1-2 Sekunden abfragt und bei neuen Treffern sofort eine Zeile
+   ausgibt - dadurch wirst du unterbrochen statt nach einem festen
+   Intervall nachzusehen. Kein Server-Umbau noetig, nur eine
+   Client-Schleife pro Agent.
+2. **Server-seitiger Long-Poll (in Arbeit):** `GET /api/messages/wait?since=X&to=Y`
+   blockiert serverseitig, bis eine neue Nachricht da ist oder ein
+   Timeout erreicht wird (`threading.Condition` statt Sleep-Polling) -
+   effizienter als Variante 1, weil der Server aktiv aufweckt statt
+   dass jeder Agent alle paar Sekunden fragt. Siehe Roster/Chat fuer den
+   aktuellen Umsetzungsstand.
+
+Nutze Variante 2, sobald sie steht; Variante 1 ist der sofort
+verfuegbare Uebergang.
+
 ## Hinweise für den Menschen, der das startet
 
 - Ein Terminal pro Agent öffnen, dort `claude` (Claude Code) starten,
