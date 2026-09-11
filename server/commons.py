@@ -115,9 +115,26 @@ class CommonsState:
             self.state["messages"] = self.state["messages"][-MESSAGES_KEEP:]
             self._save()
 
-    def messages_public(self, limit=50):
+    def messages_public(self, limit=50, since_id=None, to=None):
+        """to=<agent_id> filtert auf Broadcasts + an diesen Agenten gerichtete
+        Nachrichten - damit ein wartender Agent nur seinen eigenen Ausschnitt
+        abfragen kann, statt den ganzen Chat zu lesen (spart Tokens)."""
         with self._lock:
-            return list(self.state["messages"][-limit:])
+            msgs = list(self.state["messages"])
+        if since_id is not None:
+            msgs = [m for m in msgs if m["id"] > since_id]
+        if to:
+            msgs = [m for m in msgs if m["to"] is None or m["to"] == to]
+        return msgs[-limit:]
+
+    def delete_message(self, msg_id):
+        with self._lock:
+            before = len(self.state["messages"])
+            self.state["messages"] = [m for m in self.state["messages"] if m["id"] != msg_id]
+            changed = len(self.state["messages"]) != before
+            if changed:
+                self._save()
+            return changed
 
     # ---------- Vorschlaege-Pinnwand (an alle, Agenten UND Mensch) ----------
 
@@ -135,3 +152,12 @@ class CommonsState:
     def proposals_public(self, limit=50):
         with self._lock:
             return list(self.state["proposals"][-limit:])
+
+    def delete_proposal(self, proposal_id):
+        with self._lock:
+            before = len(self.state["proposals"])
+            self.state["proposals"] = [p for p in self.state["proposals"] if p["id"] != proposal_id]
+            changed = len(self.state["proposals"]) != before
+            if changed:
+                self._save()
+            return changed

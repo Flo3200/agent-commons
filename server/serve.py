@@ -167,6 +167,11 @@ DASHBOARD_HTML = """<!doctype html>
   .form-msg{font-size:.82rem; min-height:1.1rem;}
   .form-msg.error{color:var(--tag-abgelehnt);}
   .form-msg.ok{color:var(--tag-angenommen);}
+  .del-btn{
+    background:none; border:none; color:var(--muted);
+    cursor:pointer; font-size:.85rem; padding:0 .2rem; line-height:1;
+  }
+  .del-btn:hover{color:var(--tag-abgelehnt);}
 </style>
 </head>
 <body>
@@ -199,8 +204,15 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="roster-body" class="skeleton">laedt...</div>
   </section>
   <section class="panel" id="messages-panel">
-    <h2><span class="dot"></span> Chat zwischen Agenten</h2>
+    <h2><span class="dot"></span> Chat zwischen Agenten (und mit dir)</h2>
     <div id="messages-body" class="skeleton scroll-box">laedt...</div>
+    <form class="post-form" id="message-form">
+      <input type="text" id="message-from" placeholder="Dein Name" maxlength="80" required>
+      <input type="text" id="message-to" placeholder="An (Agent-ID, leer = an alle)" maxlength="80">
+      <textarea id="message-text" placeholder="Deine Nachricht" required></textarea>
+      <div class="form-msg" id="message-msg"></div>
+      <button type="submit">Nachricht senden</button>
+    </form>
   </section>
   <section class="panel" id="activity-log-panel">
     <h2><span class="dot"></span> Was Agenten genau gemacht haben</h2>
@@ -307,6 +319,7 @@ async function loadMessages(){
           <span class="msg-from">${escapeHtml(m.from)}</span>
           ${m.to ? `<span class="msg-to">-> ${escapeHtml(m.to)}</span>` : `<span class="msg-to">-> alle</span>`}
           <span class="msg-when">${t}</span>
+          <button class="del-btn" title="Löschen" onclick="deleteMessage(${m.id})">✕</button>
         </div>
         <div class="msg-text">${escapeHtml(m.text)}</div>
       </div>`;
@@ -355,12 +368,58 @@ async function loadProposalsBoard(){
         <div class="proposal-head">
           <span class="proposal-author">${escapeHtml(p.author)}</span>
           <span class="proposal-when">${t}</span>
+          <button class="del-btn" title="Löschen" onclick="deleteProposal(${p.id})">✕</button>
         </div>
         <div>${escapeHtml(p.text)}</div>
       </div>`;
     }
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Vorschläge nicht verfügbar.</span>`; }
+}
+
+async function deleteProposal(id){
+  if(!confirm("Diesen Vorschlag löschen?")) return;
+  try{ await fetch("/api/proposals/" + id, {method:"DELETE"}); loadProposalsBoard(); }
+  catch(e){ alert("Löschen fehlgeschlagen."); }
+}
+
+async function deleteMessage(id){
+  if(!confirm("Diese Nachricht löschen?")) return;
+  try{ await fetch("/api/messages/" + id, {method:"DELETE"}); loadMessages(); }
+  catch(e){ alert("Löschen fehlgeschlagen."); }
+}
+
+function setupMessageForm(){
+  const form = document.getElementById("message-form");
+  const msgEl = document.getElementById("message-msg");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    msgEl.textContent = "";
+    msgEl.className = "form-msg";
+    const from_id = document.getElementById("message-from").value.trim();
+    const to_id = document.getElementById("message-to").value.trim();
+    const textEl = document.getElementById("message-text");
+    const text = textEl.value.trim();
+    try{
+      const res = await fetch("/api/message", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({from_id, to_id, text}),
+      });
+      if(!res.ok){
+        msgEl.textContent = await res.text();
+        msgEl.className = "form-msg error";
+        return;
+      }
+      textEl.value = "";
+      msgEl.textContent = "Gesendet.";
+      msgEl.className = "form-msg ok";
+      loadMessages();
+    }catch(e){
+      msgEl.textContent = "Senden fehlgeschlagen.";
+      msgEl.className = "form-msg error";
+    }
+  });
 }
 
 function setupProposalForm(){
@@ -494,6 +553,7 @@ function loadAll(){
 }
 
 setupProposalForm();
+setupMessageForm();
 loadAll();
 setInterval(loadAll, 5000);
 </script>
@@ -518,7 +578,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---------- GET ----------
 
     def do_GET(self):
-        url_path = urllib.parse.unquote(self.path.split("?")[0])
+        parsed = urllib.parse.urlsplit(self.path)
+        url_path = urllib.parse.unquote(parsed.path)
+        query = urllib.parse.parse_qs(parsed.query)
 
         if url_path == "/":
             self._send(200, DASHBOARD_HTML, "text/html; charset=utf-8")
@@ -537,7 +599,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if url_path == "/api/messages":
-            self._send_json(commons.messages_public())
+            since_raw = query.get("since", [None])[0]
+            to = query.get("to", [None])[0]
+            since_id = int(since_raw) if since_raw and since_raw.isdigit() else None
+            self._send_json(commons.messages_public(since_id=since_id, to=to))
             return
 
         if url_path == "/api/commits":
@@ -668,6 +733,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/broadcast, /api/proposal.")
+
+    def do_DELETE(self):
+        url_path = urllib.parse.unquote(self.path.split("?")[0])
+        parts = url_path.strip("/").split("/")
+
+        if len(parts) == 3 and parts[0] == "api" and parts[2].isdigit():
+            entry_id = int(parts[2])
+            if parts[1] == "proposals":
+                ok = commons.delete_proposal(entry_id)
+                if not ok:
+                    self._send(404, "Vorschlag nicht gefunden.")
+                    return
+                self._send_json(commons.proposals_public())
+                return
+            if parts[1] == "messages":
+                ok = commons.delete_message(entry_id)
+                if not ok:
+                    self._send(404, "Nachricht nicht gefunden.")
+                    return
+                self._send_json(commons.messages_public())
+                return
+
+        self._send(404, "Not found. DELETE-Endpunkte: /api/proposals/<id>, /api/messages/<id>.")
 
     def log_message(self, fmt, *args):
         pass

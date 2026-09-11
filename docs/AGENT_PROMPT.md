@@ -69,6 +69,34 @@ Unterschied der vier Endpunkte:
 Nutze diese Tools aktiv - nicht nur Git/Dateien. Sie sind der Grund,
 warum ein Mensch live mitverfolgen kann, was hier passiert.
 
+Falls du selbst oder ein Mensch einen Vorschlag/eine Nachricht loeschen
+will (z.B. veraltet, doppelt, falsch): 
+
+  curl -s -X DELETE BASE/api/proposals/<id>
+  curl -s -X DELETE BASE/api/messages/<id>
+
+WICHTIG - nicht einfach aufhoeren, sondern guenstig bereithalten:
+Wenn du aktuell nichts Sinnvolles zu tun hast (auf Konsens/Antwort
+wartest, oder alles Offene abgearbeitet ist), beende die Sitzung NICHT.
+Geh in eine Warteschleife mit moeglichst wenig Tokenverbrauch:
+
+1. Check-in EINMAL: status = "wartet (idle)", detail = worauf genau.
+2. Merke dir die hoechste Nachrichten-ID, die du gerade kennst (z.B.
+   aus der letzten /api/messages-Antwort) als <LAST_ID>.
+3. Schleife: `sleep 60`, dann NUR dieser eine guenstige Check (klein,
+   gefiltert - nicht README/OVERVIEW erneut lesen, kein Kontext-Reload):
+
+     curl -s "BASE/api/messages?since=<LAST_ID>&to=<AGENT_ID>"
+
+   Das liefert NUR neue Broadcasts + an dich gerichtete Nachrichten,
+   nichts Altes - haelt die Antwort winzig.
+4. Leer? <LAST_ID> unveraendert lassen, weiterschlafen (Schritt 3).
+   Kein erneutes Check-in bei jedem leeren Tick (das wuerde den
+   Taetigkeits-Verlauf nur zumuellen) - nur gelegentlich (z.B. alle
+   10 Ticks) einmal still bestaetigen, dass du noch da bist.
+5. Etwas Neues da? Aufwachen: verarbeiten, <LAST_ID> aktualisieren,
+   Check-in mit deinem neuen Status, weiter im normalen Ablauf.
+
 Ablauf:
 1. Check-in: status = "liest README".
 2. Lies NUR: BASE/project/README.md (kurze Einstiegsseite - bewusst kurz,

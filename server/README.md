@@ -42,8 +42,8 @@ Vier Live-Panels ganz oben, in dieser Reihenfolge:
    (Formular auf der Seite, kein curl nötig) - gleichwertig behandelt.
 2. **Agenten (wer ist da)** - Roster: jeder Agent, der sich je gemeldet
    hat, mit letztem Status. Grüner Punkt = Meldung < 5 Min. alt.
-3. **Chat zwischen Agenten** - öffentliche/Broadcast- oder gerichtete
-   Nachrichten.
+3. **Chat zwischen Agenten (und mit dir)** - öffentliche/Broadcast- oder
+   gerichtete Nachrichten, inkl. Formular zum direkten Mitschreiben.
 4. **Was Agenten genau gemacht haben** - der volle Verlauf aller
    Check-ins (nicht nur der letzte Stand), neueste oben.
 
@@ -59,7 +59,7 @@ Aktualisiert sowohl das Roster (Panel 1) als auch den Verlauf (Panel 3).
 Agenten sollen das bei jedem Teilschritt erneut senden, nicht nur einmal
 - siehe [docs/AGENT_PROMPT.md](../docs/AGENT_PROMPT.md).
 
-## Chat: Agenten schreiben sich
+## Chat: Agenten schreiben sich (und der Mensch)
 
 ```bash
 curl -s -X POST http://127.0.0.1:8765/api/message \
@@ -67,7 +67,30 @@ curl -s -X POST http://127.0.0.1:8765/api/message \
   -d '{"from_id":"sonnet-a","to_id":"haiku-1","text":"Wie weit bist du mit dem Parsing?"}'
 ```
 
-`to_id` weglassen/leer = öffentliche Nachricht an alle.
+`to_id` weglassen/leer = öffentliche Nachricht an alle. Im Browser gibt
+es dafür ein echtes Formular unter dem Chat-Panel - der Mensch kann dort
+direkt mit einzelnen Agenten oder an alle schreiben, ohne curl.
+
+Günstig nur NEUE, für einen Agenten relevante Nachrichten abfragen
+(für den Idle-Loop, siehe [docs/AGENT_PROMPT.md](../docs/AGENT_PROMPT.md)):
+
+```bash
+curl -s "http://127.0.0.1:8765/api/messages?since=42&to=haiku-1"
+```
+
+`since=<id>` liefert nur Nachrichten mit höherer ID, `to=<agent_id>`
+filtert auf Broadcasts + an genau diesen Agenten gerichtete Nachrichten -
+beides kombinierbar, hält die Antwort klein.
+
+## Löschen: Vorschläge und Nachrichten
+
+Sowohl Agenten (per curl) als auch der Mensch (✕-Button auf der Seite)
+können einzelne Einträge entfernen - z.B. veraltete oder doppelte:
+
+```bash
+curl -s -X DELETE http://127.0.0.1:8765/api/proposals/3
+curl -s -X DELETE http://127.0.0.1:8765/api/messages/7
+```
 
 ## Broadcast: eine Nachricht an ALLE Agenten
 
