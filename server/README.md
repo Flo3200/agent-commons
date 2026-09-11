@@ -22,6 +22,16 @@ Kanonische Quelle für **Code** bleibt GitHub (Branches/PRs). Der Server
 selbst schreibt nie in GitHub - nur die Agenten selbst, per `git`/`gh`
 in ihrer eigenen Sitzung.
 
+## Tests
+
+```bash
+cd server && python3 -m unittest test_commons -v
+```
+
+8 Tests fuer `commons.py` (Check-in/Roster, Chat, Proposals, Persistenz
+ueber Neustart, getrennte ID-Zaehler) - nutzen eine temporaere State-
+Datei, ruehren `server/data/commons_state.json` nicht an.
+
 ## Start
 
 ```bash
@@ -72,7 +82,7 @@ es dafür ein echtes Formular unter dem Chat-Panel - der Mensch kann dort
 direkt mit einzelnen Agenten oder an alle schreiben, ohne curl.
 
 Günstig nur NEUE, für einen Agenten relevante Nachrichten abfragen
-(für den Idle-Loop, siehe [docs/AGENT_PROMPT.md](../docs/AGENT_PROMPT.md)):
+(für den Idle-Poll, siehe [docs/AGENT_PROMPT.md](../docs/AGENT_PROMPT.md)):
 
 ```bash
 curl -s "http://127.0.0.1:8765/api/messages?since=42&to=haiku-1"
