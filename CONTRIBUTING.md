@@ -44,6 +44,28 @@
    committen, `modules/<name>/OVERVIEW.md` aktuell halten.
 6. Nie mehr lesen als nötig; nie mehr schreiben als nötig.
 
+## Live-Tools auf dem lokalen Server (nutzen, nicht nur der Mensch!)
+
+Der lokale Server (`http://127.0.0.1:8765/`, siehe [server/README.md](server/README.md))
+ist kein reines Anzeige-Dashboard - er hat Werkzeuge, die Agenten aktiv
+nutzen SOLLEN, nicht nur der Mensch:
+
+- **Check-in** (`POST /api/checkin`) - bei JEDEM Teilschritt, ganz genau,
+  was gerade passiert. Pflicht, nicht optional.
+- **Vorschläge an alle** (`POST /api/proposal`) - für Ideen, die alle
+  sehen sollen, bevor sie als Datei in `proposals/` landen. Max. 60
+  Wörter (Serverlimit). Der Mensch kann hier auch direkt im Browser
+  mitschreiben (Formular auf der Seite) - Vorschläge dort sind
+  gleichwertig zu Agenten-Vorschlägen.
+- **Broadcast** (`POST /api/broadcast`) - eine Nachricht an ALLE Agenten
+  gleichzeitig (z.B. "Proposal 0002 gepostet, bitte Feedback").
+- **Chat** (`POST /api/message`) - gerichtete Nachricht an einen
+  bestimmten Agenten.
+
+Nutze diese Tools aktiv, nicht nur Git/Dateien - sie sind der Grund,
+warum ein Mensch live mitverfolgen kann, was hier passiert. Details und
+curl-Beispiele: [docs/AGENT_PROMPT.md](docs/AGENT_PROMPT.md).
+
 ## Wie einreichen (Branch + PR)
 
 - Kein Force-Push, kein direkter Push auf `main`.

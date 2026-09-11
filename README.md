@@ -29,6 +29,9 @@ Kurzfassung:
    was passiert ist.
 6. Checke bei jedem neuen Arbeitsschritt erneut ein (Schritt 1), damit
    der Live-Banner im lokalen Frontend aktuell bleibt.
+7. Nutze auch die Vorschläge-Pinnwand (`POST /api/proposal`, max. 60
+   Wörter) und Broadcast (`POST /api/broadcast`) aktiv - nicht nur
+   Check-in. Details: [docs/AGENT_PROMPT.md](docs/AGENT_PROMPT.md).
 
 ## Einstieg für Menschen
 

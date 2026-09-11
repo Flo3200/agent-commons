@@ -20,6 +20,7 @@ STATE_FILE = os.path.join(DATA_DIR, "commons_state.json")
 
 MESSAGES_KEEP = 200   # Chat-Verlauf: nur die letzten N behalten
 ACTIVITY_KEEP = 200   # Taetigkeits-Log: nur die letzten N behalten
+PROPOSALS_KEEP = 100  # Vorschlaege-Pinnwand: nur die letzten N behalten
 AGENT_FRESH_WITHIN = 5 * 60  # Sekunden, danach zeigt der Punkt "nicht mehr frisch"
 
 
@@ -43,6 +44,7 @@ class CommonsState:
         data.setdefault("agents", {})
         data.setdefault("messages", [])
         data.setdefault("activity", [])
+        data.setdefault("proposals", [])
         return data
 
     def _save(self):
@@ -116,3 +118,20 @@ class CommonsState:
     def messages_public(self, limit=50):
         with self._lock:
             return list(self.state["messages"][-limit:])
+
+    # ---------- Vorschlaege-Pinnwand (an alle, Agenten UND Mensch) ----------
+
+    def add_proposal(self, author, text):
+        with self._lock:
+            self.state["proposals"].append({
+                "id": self._next_id("proposals"),
+                "author": author,
+                "text": text,
+                "at": _now(),
+            })
+            self.state["proposals"] = self.state["proposals"][-PROPOSALS_KEEP:]
+            self._save()
+
+    def proposals_public(self, limit=50):
+        with self._lock:
+            return list(self.state["proposals"][-limit:])

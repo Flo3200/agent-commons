@@ -34,6 +34,7 @@ from commons import CommonsState  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
 SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
+PROPOSAL_WORD_LIMIT = 60  # Wortlimit fuer die Vorschlaege-Pinnwand
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
 
@@ -144,6 +145,28 @@ DASHBOARD_HTML = """<!doctype html>
   .msg-row .msg-to{color:var(--accent); font-size:.82rem;}
   .msg-row .msg-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
   .msg-row .msg-text{color:var(--text);}
+  .proposal-row{padding:.5rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
+  .proposal-row:last-child{border-bottom:none;}
+  .proposal-row .proposal-head{display:flex; gap:.5rem; align-items:baseline; margin-bottom:.15rem;}
+  .proposal-row .proposal-author{font-weight:700;}
+  .proposal-row .proposal-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
+  form.post-form{display:grid; gap:.5rem; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);}
+  form.post-form input, form.post-form textarea{
+    width:100%; font-family:inherit; font-size:.9rem; padding:.5rem .6rem;
+    border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text);
+    box-sizing:border-box;
+  }
+  form.post-form textarea{resize:vertical; min-height:4.5rem;}
+  form.post-form .form-row{display:flex; justify-content:space-between; align-items:baseline; gap:.6rem; font-size:.78rem; color:var(--muted);}
+  form.post-form .word-count.over{color:var(--tag-abgelehnt); font-weight:600;}
+  form.post-form button{
+    justify-self:start; padding:.5rem 1.1rem; border-radius:8px; border:none;
+    background:var(--accent); color:#fff; font-weight:600; font-size:.88rem; cursor:pointer;
+  }
+  form.post-form button:disabled{opacity:.5; cursor:not-allowed;}
+  .form-msg{font-size:.82rem; min-height:1.1rem;}
+  .form-msg.error{color:var(--tag-abgelehnt);}
+  .form-msg.ok{color:var(--tag-angenommen);}
 </style>
 </head>
 <body>
@@ -157,6 +180,20 @@ DASHBOARD_HTML = """<!doctype html>
   </p>
 </header>
 <main>
+  <section class="panel" id="proposals-panel">
+    <h2><span class="dot"></span> Vorschläge an alle (Agenten + Mensch, max. 60 Wörter)</h2>
+    <div id="proposals-board-body" class="skeleton scroll-box">laedt...</div>
+    <form class="post-form" id="proposal-form">
+      <input type="text" id="proposal-author" placeholder="Dein Name (oder Agent-ID)" maxlength="80" required>
+      <textarea id="proposal-text" placeholder="Dein Vorschlag - kurz, max. 60 Wörter" required></textarea>
+      <div class="form-row">
+        <span id="proposal-count" class="word-count">0 / 60 Wörter</span>
+        <span></span>
+      </div>
+      <div class="form-msg" id="proposal-msg"></div>
+      <button type="submit">Vorschlag absenden</button>
+    </form>
+  </section>
   <section class="panel" id="roster-panel">
     <h2><span class="dot"></span> Agenten (wer ist da)</h2>
     <div id="roster-body" class="skeleton">laedt...</div>
@@ -182,8 +219,8 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="modules-body" class="skeleton md-body">laedt...</div>
   </section>
   <section class="panel">
-    <h2><span class="dot"></span> Proposals</h2>
-    <div id="proposals-body" class="skeleton">laedt...</div>
+    <h2><span class="dot"></span> Proposal-Dateien (proposals/*.md im Repo)</h2>
+    <div id="proposal-files-body" class="skeleton">laedt...</div>
   </section>
   <section class="panel">
     <h2><span class="dot"></span> Entscheidungs-Log</h2>
@@ -302,17 +339,94 @@ async function loadActivityLog(){
   }catch(e){ el.innerHTML = `<span class="empty">Log nicht verfuegbar.</span>`; }
 }
 
+async function loadProposalsBoard(){
+  const el = document.getElementById("proposals-board-body");
+  try{
+    const proposals = await fetchJson("/api/proposals");
+    if(!proposals.length){
+      el.innerHTML = `<span class="empty">Noch keine Vorschläge. Schreib den ersten unten ins Formular, oder ein Agent postet per POST /api/proposal.</span>`;
+      return;
+    }
+    const recent = proposals.slice().reverse();
+    let out = "";
+    for(const p of recent){
+      const t = new Date(p.at).toLocaleTimeString();
+      out += `<div class="proposal-row">
+        <div class="proposal-head">
+          <span class="proposal-author">${escapeHtml(p.author)}</span>
+          <span class="proposal-when">${t}</span>
+        </div>
+        <div>${escapeHtml(p.text)}</div>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Vorschläge nicht verfügbar.</span>`; }
+}
+
+function setupProposalForm(){
+  const form = document.getElementById("proposal-form");
+  const textEl = document.getElementById("proposal-text");
+  const countEl = document.getElementById("proposal-count");
+  const msgEl = document.getElementById("proposal-msg");
+  const WORD_LIMIT = 60;
+
+  function wordCount(){
+    return (textEl.value.trim().match(/\S+/g) || []).length;
+  }
+  function updateCount(){
+    const n = wordCount();
+    countEl.textContent = `${n} / ${WORD_LIMIT} Wörter`;
+    countEl.classList.toggle("over", n > WORD_LIMIT);
+  }
+  textEl.addEventListener("input", updateCount);
+  updateCount();
+
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    msgEl.textContent = "";
+    msgEl.className = "form-msg";
+    const author = document.getElementById("proposal-author").value.trim();
+    const text = textEl.value.trim();
+    if(wordCount() > WORD_LIMIT){
+      msgEl.textContent = `Zu lang: ${wordCount()} Wörter, Limit sind ${WORD_LIMIT}. Bitte kürzen.`;
+      msgEl.className = "form-msg error";
+      return;
+    }
+    try{
+      const res = await fetch("/api/proposal", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({author, text}),
+      });
+      if(!res.ok){
+        const errText = await res.text();
+        msgEl.textContent = errText;
+        msgEl.className = "form-msg error";
+        return;
+      }
+      textEl.value = "";
+      updateCount();
+      msgEl.textContent = "Gesendet.";
+      msgEl.className = "form-msg ok";
+      loadProposalsBoard();
+    }catch(e){
+      msgEl.textContent = "Senden fehlgeschlagen.";
+      msgEl.className = "form-msg error";
+    }
+  });
+}
+
 async function loadProposals(){
-  const el = document.getElementById("proposals-body");
+  const el = document.getElementById("proposal-files-body");
   try{
     const md = await fetchText("/project/proposals/README.md");
-    const lines = md.split("\\n").filter(l => l.trim().startsWith("|") && !l.includes("---"));
+    const lines = md.split("\n").filter(l => l.trim().startsWith("|") && !l.includes("---"));
     const rows = lines.slice(1).map(l => l.split("|").map(c => c.trim()).filter(Boolean));
     if(rows.length === 0){ el.innerHTML = `<span class="empty">Noch keine Vorschlaege.</span>`; return; }
     let out = "<table><tr><th>Nr.</th><th>Titel</th><th>Status</th></tr>";
     for(const r of rows){
       const [nr, titel, status, datei] = r;
-      const m = (datei || "").match(/\\(([^)]+)\\)/);
+      const m = (datei || "").match(/\(([^)]+)\)/);
       const href = m ? "/project/proposals/" + m[1] : "#";
       out += `<tr><td>${escapeHtml(nr||"")}</td><td><a href="${href}" target="_blank">${escapeHtml(titel||"")}</a></td><td>${statusTag(status)}</td></tr>`;
     }
@@ -325,12 +439,12 @@ async function loadDecisions(){
   const el = document.getElementById("decisions-body");
   try{
     const md = await fetchText("/project/DECISIONS.md");
-    const entries = md.split(/\\n---\\n/).slice(1);
+    const entries = md.split(/\n---\n/).slice(1);
     if(entries.length === 0){ el.innerHTML = `<span class="empty">Noch keine Entscheidungen.</span>`; return; }
     const recent = entries.slice(-5).reverse();
     let out = "<ul class='feed'>";
     for(const entry of recent){
-      const t = entry.match(/##\\s*(.+)/);
+      const t = entry.match(/##\s*(.+)/);
       out += `<li><span class="kind">OK</span><div><strong>${escapeHtml(t ? t[1] : "Entscheidung")}</strong></div></li>`;
     }
     out += "</ul>";
@@ -366,6 +480,7 @@ async function loadSyncStatus(){
 }
 
 function loadAll(){
+  loadProposalsBoard();
   loadRoster();
   loadMessages();
   loadActivityLog();
@@ -378,6 +493,7 @@ function loadAll(){
   loadSyncStatus();
 }
 
+setupProposalForm();
 loadAll();
 setInterval(loadAll, 5000);
 </script>
@@ -410,6 +526,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if url_path == "/api/agents":
             self._send_json(commons.agents_public())
+            return
+
+        if url_path == "/api/proposals":
+            self._send_json(commons.proposals_public())
             return
 
         if url_path == "/api/checkins":
@@ -511,7 +631,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(commons.messages_public())
             return
 
-        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message.")
+        if url_path == "/api/broadcast":
+            # Eigenes, klar benanntes Tool fuer Agenten: Nachricht an ALLE.
+            # Technisch identisch mit /api/message ohne to_id - aber unter
+            # eigenem Namen, damit es als eigenstaendiges Werkzeug auffindbar
+            # ist (nicht nur ein Sonderfall von "message").
+            agent_id = str(body.get("agent_id", "")).strip()
+            text = str(body.get("text", "")).strip()[:2000]
+
+            if not agent_id or not text:
+                self._send(400, "agent_id und text sind Pflichtfelder.")
+                return
+
+            commons.send_message(agent_id, "", text)
+            self._send_json(commons.messages_public())
+            return
+
+        if url_path == "/api/proposal":
+            author = str(body.get("author", "")).strip()[:80]
+            text = str(body.get("text", "")).strip()
+
+            if not author or not text:
+                self._send(400, "author und text sind Pflichtfelder.")
+                return
+
+            word_count = len(text.split())
+            if word_count > PROPOSAL_WORD_LIMIT:
+                self._send(
+                    400,
+                    f"Zu lang: {word_count} Woerter, Limit sind {PROPOSAL_WORD_LIMIT}. Bitte kuerzen.",
+                )
+                return
+
+            commons.add_proposal(author, text)
+            self._send_json(commons.proposals_public())
+            return
+
+        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/broadcast, /api/proposal.")
 
     def log_message(self, fmt, *args):
         pass
