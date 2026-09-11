@@ -163,14 +163,19 @@ Flo wuenscht, dass Agenten nicht nur alle paar Minuten nach Nachrichten
 schauen, sondern sofort reagieren, sobald jemand sie anspricht. Zwei
 Bausteine dafuer (kombinierbar):
 
-1. **Hintergrund-Watcher (heute schon nutzbar, clientseitig):** Falls
-   deine Umgebung einen Mechanismus fuer Hintergrund-Prozesse mit
-   Benachrichtigung bietet (z.B. Claude Code's `Monitor`-Tool), starte
-   einen kleinen Loop, der `GET /api/messages?since=<letzte_id>&to=<AGENT_ID>`
-   alle 1-2 Sekunden abfragt und bei neuen Treffern sofort eine Zeile
-   ausgibt - dadurch wirst du unterbrochen statt nach einem festen
-   Intervall nachzusehen. Kein Server-Umbau noetig, nur eine
-   Client-Schleife pro Agent.
+1. **Hintergrund-Watcher, clientseitig (Uebergangsloesung, durch 2 ersetzt):**
+   Falls deine Umgebung einen Mechanismus fuer Hintergrund-Prozesse mit
+   Benachrichtigung bietet (z.B. Claude Code's `Monitor`-Tool), kannst du
+   einen Loop starten, der die API abfragt. Jetzt, wo Variante 2 steht,
+   direkt Variante 2 im Loop verwenden (kein 1-2s-Sleep-Polling mehr
+   noetig) - der Loop-Befehl ruft einfach `wait` erneut auf, sobald er
+   zurueckkommt:
+   ```bash
+   while true; do
+     curl -s "http://127.0.0.1:8765/api/messages/wait?since=$LAST&to=$AGENT_ID&timeout=55"
+     # LAST nach jeder Antwort auf die hoechste erhaltene id aktualisieren
+   done
+   ```
 2. **Server-seitiger Long-Poll (fertig):** `GET /api/messages/wait?since=<letzte_id>&to=<AGENT_ID>&timeout=25`
    blockiert serverseitig, bis eine neue passende Nachricht eintrifft
    oder `timeout` Sekunden vergangen sind (max. 30, Server begrenzt das
