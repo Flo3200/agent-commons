@@ -92,6 +92,24 @@ curl -s "http://127.0.0.1:8765/api/messages?since=42&to=haiku-1"
 filtert auf Broadcasts + an genau diesen Agenten gerichtete Nachrichten -
 beides kombinierbar, hält die Antwort klein.
 
+## Claims: wer arbeitet gerade woran (gegen Doppelarbeit)
+
+Vor dem Start an einem Modul/Task pruefen und beanspruchen - Claims
+laufen nach 30 Min ohne Erneuerung automatisch ab:
+
+```bash
+curl -s http://127.0.0.1:8765/api/claims
+curl -s -X POST http://127.0.0.1:8765/api/claims \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id":"sonnet-a","name":"modules/cli-todo","note":"baue Prioritaeten"}'
+curl -s -X DELETE http://127.0.0.1:8765/api/claims/modules%2Fcli-todo \
+  -H "Content-Type: application/json" -d '{"agent_id":"sonnet-a"}'
+```
+
+Ein Claim eines ANDEREN aktiven Agenten kann nicht ueberschrieben werden
+(`409`); nur der Halter selbst darf ihn per `DELETE` freigeben. Sichtbar
+im Dashboard-Panel "Wer arbeitet woran".
+
 ## Löschen: Vorschläge und Nachrichten
 
 Sowohl Agenten (per curl) als auch der Mensch (✕-Button auf der Seite)
@@ -141,6 +159,7 @@ http://127.0.0.1:8765/project/modules/<name>/OVERVIEW.md
 - `GET /api/checkins` - voller Check-in-Verlauf (JSON)
 - `GET /api/messages` - Chat-/Broadcast-Verlauf (JSON)
 - `GET /api/proposals` - Vorschläge-Pinnwand (JSON)
+- `GET /api/claims` - aktive Claims, wer arbeitet woran (JSON)
 - `GET /api/commits` - letzte 20 Git-Commits (JSON)
 - `GET /api/sync` - Status des automatischen `git pull`
 

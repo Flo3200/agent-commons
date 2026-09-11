@@ -88,6 +88,40 @@ class CommonsStateTests(unittest.TestCase):
         self.assertEqual(msg_id, 1)
         self.assertEqual(prop_id, 1)
 
+    def test_claim_and_list(self):
+        claim = self.state.claim("sonnet-a", "modules/cli-todo", "baue CLI")
+        self.assertEqual(claim["agent_id"], "sonnet-a")
+        claims = self.state.claims_public()
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["name"], "modules/cli-todo")
+
+    def test_claim_blocks_other_agent(self):
+        self.state.claim("sonnet-a", "modules/cli-todo", "baue CLI")
+        blocked = self.state.claim("haiku-1", "modules/cli-todo", "baue auch CLI")
+        self.assertIsNone(blocked)
+        self.assertEqual(len(self.state.claims_public()), 1)
+
+    def test_same_agent_can_renew_own_claim(self):
+        self.state.claim("sonnet-a", "modules/cli-todo", "Schritt 1")
+        renewed = self.state.claim("sonnet-a", "modules/cli-todo", "Schritt 2")
+        self.assertIsNotNone(renewed)
+        self.assertEqual(renewed["note"], "Schritt 2")
+        self.assertEqual(len(self.state.claims_public()), 1)
+
+    def test_release_claim_only_by_owner(self):
+        self.state.claim("sonnet-a", "modules/cli-todo", "baue CLI")
+        self.assertFalse(self.state.release_claim("modules/cli-todo", "haiku-1"))
+        self.assertTrue(self.state.release_claim("modules/cli-todo", "sonnet-a"))
+        self.assertEqual(self.state.claims_public(), [])
+
+    def test_expired_claim_can_be_taken_over(self):
+        self.state.claim("sonnet-a", "modules/cli-todo", "baue CLI")
+        # Claim kuenstlich in die Vergangenheit setzen, um Ablauf zu simulieren.
+        self.state.state["claims"]["modules/cli-todo"]["at"] = "2000-01-01T00:00:00+00:00"
+        taken_over = self.state.claim("haiku-1", "modules/cli-todo", "uebernehme")
+        self.assertIsNotNone(taken_over)
+        self.assertEqual(taken_over["agent_id"], "haiku-1")
+
 
 if __name__ == "__main__":
     unittest.main()
