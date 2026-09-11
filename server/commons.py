@@ -22,6 +22,7 @@ MESSAGES_KEEP = 200   # Chat-Verlauf: nur die letzten N behalten
 ACTIVITY_KEEP = 200   # Taetigkeits-Log: nur die letzten N behalten
 PROPOSALS_KEEP = 100  # Vorschlaege-Pinnwand: nur die letzten N behalten
 AGENT_FRESH_WITHIN = 5 * 60  # Sekunden, danach zeigt der Punkt "nicht mehr frisch"
+CLAIM_TTL = 30 * 60  # Sekunden, danach gilt ein Claim als abgelaufen (Agent abgebrochen o.ae.)
 
 
 def _now():
@@ -45,6 +46,7 @@ class CommonsState:
         data.setdefault("messages", [])
         data.setdefault("activity", [])
         data.setdefault("proposals", [])
+        data.setdefault("claims", {})
         return data
 
     def _save(self):
@@ -161,3 +163,48 @@ class CommonsState:
             if changed:
                 self._save()
             return changed
+
+    # ---------- Claims: wer arbeitet gerade woran (gegen Doppelarbeit) ----------
+
+    def claim(self, agent_id, name, note):
+        """Beansprucht <name> (z.B. Modulnamen) fuer agent_id, oder erneuert
+        den eigenen Claim (gleicher agent_id+name). Ueberschreibt NICHT den
+        aktiven Claim eines anderen Agenten - der muss zuerst freigeben."""
+        with self._lock:
+            existing = self.state["claims"].get(name)
+            if existing and existing["agent_id"] != agent_id and not self._claim_expired(existing):
+                return None  # von jemand anderem aktiv beansprucht
+            self.state["claims"][name] = {"agent_id": agent_id, "note": note, "at": _now()}
+            self._save()
+            return dict(self.state["claims"][name], name=name)
+
+    def _claim_expired(self, entry):
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(entry["at"])).total_seconds()
+        except Exception:
+            return True
+        return age > CLAIM_TTL
+
+    def claims_public(self):
+        """Nur aktive (nicht abgelaufene) Claims - abgelaufene raeumen wir
+        gleich mit auf, damit die Liste nicht endlos waechst."""
+        with self._lock:
+            active = {
+                name: entry for name, entry in self.state["claims"].items()
+                if not self._claim_expired(entry)
+            }
+            changed = len(active) != len(self.state["claims"])
+            if changed:
+                self.state["claims"] = active
+                self._save()
+            return [dict(entry, name=name) for name, entry in active.items()]
+
+    def release_claim(self, name, agent_id):
+        """Nur der Agent, der den Claim haelt, darf ihn freigeben."""
+        with self._lock:
+            entry = self.state["claims"].get(name)
+            if not entry or entry["agent_id"] != agent_id:
+                return False
+            del self.state["claims"][name]
+            self._save()
+            return True

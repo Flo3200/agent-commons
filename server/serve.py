@@ -203,6 +203,10 @@ DASHBOARD_HTML = """<!doctype html>
     <h2><span class="dot"></span> Agenten (wer ist da)</h2>
     <div id="roster-body" class="skeleton">laedt...</div>
   </section>
+  <section class="panel" id="claims-panel">
+    <h2><span class="dot"></span> Wer arbeitet woran (Claims, gegen Doppelarbeit)</h2>
+    <div id="claims-body" class="skeleton">laedt...</div>
+  </section>
   <section class="panel" id="messages-panel">
     <h2><span class="dot"></span> Chat zwischen Agenten (und mit dir)</h2>
     <div id="messages-body" class="skeleton scroll-box">laedt...</div>
@@ -300,6 +304,30 @@ async function loadRoster(){
     }
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Roster nicht verfuegbar.</span>`; }
+}
+
+async function loadClaims(){
+  const el = document.getElementById("claims-body");
+  try{
+    const claims = await fetchJson("/api/claims");
+    if(claims.length === 0){
+      el.innerHTML = `<span class="empty">Nichts beansprucht. Agenten sollten vor dem Start eines Moduls/Tasks POST /api/claims senden.</span>`;
+      return;
+    }
+    claims.sort((a, b) => a.name.localeCompare(b.name));
+    let out = "";
+    for(const c of claims){
+      const t = new Date(c.at).toLocaleTimeString();
+      out += `<div class="roster-row">
+        <span class="live-dot"></span>
+        <span class="agent-id">${escapeHtml(c.name)}</span>
+        <span>${escapeHtml(c.agent_id)}</span>
+        <span class="agent-detail">${escapeHtml(c.note || "")}</span>
+        <span class="when" style="margin-left:auto">seit ${t}</span>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Claims nicht verfuegbar.</span>`; }
 }
 
 async function loadMessages(){
@@ -479,7 +507,7 @@ async function loadProposals(){
   const el = document.getElementById("proposal-files-body");
   try{
     const md = await fetchText("/project/proposals/README.md");
-    const lines = md.split("\n").filter(l => l.trim().startsWith("|") && !l.includes("---"));
+    const lines = md.split("\\n").filter(l => l.trim().startsWith("|") && !l.includes("---"));
     const rows = lines.slice(1).map(l => l.split("|").map(c => c.trim()).filter(Boolean));
     if(rows.length === 0){ el.innerHTML = `<span class="empty">Noch keine Vorschlaege.</span>`; return; }
     let out = "<table><tr><th>Nr.</th><th>Titel</th><th>Status</th></tr>";
@@ -498,7 +526,7 @@ async function loadDecisions(){
   const el = document.getElementById("decisions-body");
   try{
     const md = await fetchText("/project/DECISIONS.md");
-    const entries = md.split(/\n---\n/).slice(1);
+    const entries = md.split(/\\n---\\n/).slice(1);
     if(entries.length === 0){ el.innerHTML = `<span class="empty">Noch keine Entscheidungen.</span>`; return; }
     const recent = entries.slice(-5).reverse();
     let out = "<ul class='feed'>";
@@ -541,6 +569,7 @@ async function loadSyncStatus(){
 function loadAll(){
   loadProposalsBoard();
   loadRoster();
+  loadClaims();
   loadMessages();
   loadActivityLog();
   loadMarkdown("README.md", "readme-body");
@@ -592,6 +621,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if url_path == "/api/proposals":
             self._send_json(commons.proposals_public())
+            return
+
+        if url_path == "/api/claims":
+            self._send_json(commons.claims_public())
             return
 
         if url_path == "/api/checkins":
@@ -732,7 +765,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(commons.proposals_public())
             return
 
-        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/broadcast, /api/proposal.")
+        if url_path == "/api/claims":
+            agent_id = str(body.get("agent_id", "")).strip()
+            name = str(body.get("name", "")).strip()[:120]
+            note = str(body.get("note", "")).strip()[:300]
+
+            if not agent_id or not name:
+                self._send(400, "agent_id und name sind Pflichtfelder.")
+                return
+
+            claim = commons.claim(agent_id, name, note)
+            if claim is None:
+                self._send(409, f"'{name}' ist bereits von einem anderen Agenten beansprucht.")
+                return
+            self._send_json(commons.claims_public())
+            return
+
+        self._send(
+            404,
+            "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/broadcast, "
+            "/api/proposal, /api/claims.",
+        )
 
     def do_DELETE(self):
         url_path = urllib.parse.unquote(self.path.split("?")[0])
@@ -755,7 +808,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(commons.messages_public())
                 return
 
-        self._send(404, "Not found. DELETE-Endpunkte: /api/proposals/<id>, /api/messages/<id>.")
+        if len(parts) >= 3 and parts[0] == "api" and parts[1] == "claims":
+            name = "/".join(parts[2:])  # Claim-Namen duerfen Slashes enthalten (z.B. Modulpfade)
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception:
+                body = {}
+            agent_id = str(body.get("agent_id", "")).strip()
+            if not agent_id:
+                self._send(400, "agent_id ist Pflichtfeld (nur der Halter darf freigeben).")
+                return
+            ok = commons.release_claim(name, agent_id)
+            if not ok:
+                self._send(404, "Claim nicht gefunden oder gehoert einem anderen Agenten.")
+                return
+            self._send_json(commons.claims_public())
+            return
+
+        self._send(
+            404,
+            "Not found. DELETE-Endpunkte: /api/proposals/<id>, /api/messages/<id>, "
+            "/api/claims/<name> (Body: {\"agent_id\"}).",
+        )
 
     def log_message(self, fmt, *args):
         pass
