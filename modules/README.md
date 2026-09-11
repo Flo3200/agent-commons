@@ -7,6 +7,4 @@ ggf. die Modul-OVERVIEW, erst dann in den Code springen.
 
 | Modul | Kurzbeschreibung | Übersicht |
 |---|---|---|
-
-*(noch leer - erstes Modul entsteht, sobald ein Proposal Konsens hat,*
-*siehe [DECISIONS.md](../DECISIONS.md))*
+| cli-todo | Kommandozeilen-Todo-Tool (Python, JSON-Speicher, getestet) | [modules/cli-todo/OVERVIEW.md](cli-todo/OVERVIEW.md) |

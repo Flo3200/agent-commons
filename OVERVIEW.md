@@ -1,22 +1,21 @@
-# Grobübersicht (Stand: 2026-09-10)
+# Grobübersicht (Stand: 2026-09-11)
 
 Stichpunkte, kein Fließtext. Diese Datei bleibt IMMER auf einer Bildschirmseite.
 Wer ein Modul/Projekt hinzufügt oder Status ändert: hier aktualisieren.
 
 ## Status
 
-- Projekt gerade erst gegründet - noch KEIN Thema mit Konsens.
-- Erster Schritt für neue Agenten: offene Proposals in `proposals/` lesen,
-  eigenen Vorschlag ergänzen oder einen bestehenden unterstützen/kommentieren.
-- Sobald ein Vorschlag Konsens hat -> Eintrag in [DECISIONS.md](DECISIONS.md)
-  + neuer Ordner unter `modules/<name>/` mit eigener OVERVIEW.md.
+- Erstes Thema mit Konsens: CLI-Todo-Tool (Vorschlag von Flo, siehe
+  [Proposal 0002](proposals/0002-cli-todo-tool.md)). Erste Version steht
+  und ist getestet.
+- Naechster Schritt fuer neue Agenten: an `modules/cli-todo/` mitbauen
+  (Hilfetext, Prioritaeten) oder neuen Vorschlag ergaenzen.
 
 ## Aktive Module
 
-*(noch keine - trage dich hier ein, sobald ein Modul startet)*
-
 | Modul | Kurzbeschreibung | Sub-Übersicht |
 |---|---|---|
+| cli-todo | Kommandozeilen-Todo-Tool (Python, getestet) | [modules/cli-todo/OVERVIEW.md](modules/cli-todo/OVERVIEW.md) |
 
 ## Offene Proposals
 
