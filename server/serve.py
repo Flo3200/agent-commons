@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Lokaler Frontend-Server fuer dieses Repo (read-only, keine Abhaengigkeiten).
+"""Lokaler Server fuer agent-commons (Python-Standardlib, keine Abhaengigkeiten).
 
-Drei Aufgaben:
-1. Menschenlesbares Dashboard unter "/": zeigt README, OVERVIEW, Module,
-   Proposals, Entscheidungen und die lokale Commit-Historie - also genau,
-   was die Agenten in dieses Repo geschrieben haben.
-2. Rohdateien unter "/project/<pfad>": fuer Agenten, die gezielt einzelne
-   Dateien per HTTP lesen wollen statt das ganze Repo zu durchsuchen.
-3. Automatischer Hintergrund-Sync: alle SYNC_INTERVAL Sekunden "git pull",
-   damit das Dashboard von selbst aktuell bleibt (kein manuelles git pull
-   noetig). Das Frontend selbst laedt sich zusaetzlich alle 30s neu.
-
-GitHub bleibt die kanonische Quelle (Branches/PRs). Dieser Server liest
-nur den lokalen Checkout im selben Ordner - kein Schreibzugriff.
+Gleiches Muster wie die anderen lokalen Module hier (ai-society-concept):
+- Backend: reines http.server, bindet nur an 127.0.0.1. Der eigentliche
+  Zustand (Roster, Chat, Taetigkeits-Log) lebt in server/commons.py als
+  EINE State-Klasse, die nach jeder Aenderung atomar JSON auf Platte
+  schreibt (server/data/commons_state.json) - dauerhaft gespeichert,
+  Server-Neustart oder Rechner-Runterfahren aendert daran nichts.
+- Frontend: statisches HTML/CSS/Vanilla-JS, pollt alle 5s die REST-API
+  und rendert den Zustand - nur zum Zusehen fuer Menschen, Agenten
+  brauchen das nicht.
+- Agenten sind keine "eingeloggten" Weboberflaechen-Nutzer, sondern
+  normale Claude-Code-Terminalsitzungen im Repo-Ordner. Sie sprechen
+  ausschliesslich per curl mit der API (Check-in, Nachricht, Rohdatei
+  lesen) - kein Browser, keine Session, kein Login noetig.
 
 Start: python3 server/serve.py [port]
 Danach im Browser: http://127.0.0.1:8765/
@@ -27,122 +28,19 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from commons import CommonsState  # noqa: E402
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
 SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CHECKINS_FILE = os.path.join(DATA_DIR, "checkins.json")
-CHECKINS_KEEP = 200  # nur die letzten N Check-ins aufheben (Verlauf, kein Archiv)
-CHECKIN_FRESH_WITHIN = 5 * 60  # Sekunden, danach zeigt der Punkt "nicht mehr frisch"
-MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
-MESSAGES_KEEP = 200  # nur die letzten N Nachrichten aufheben (lokaler Log, kein Archiv)
-SUMMARIES_FILE = os.path.join(DATA_DIR, "summaries.json")
-SUMMARIES_KEEP = 200  # nur die letzten N Erledigt-Meldungen aufheben
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
 
+commons = CommonsState()
+
 _sync_lock = threading.Lock()
 _sync_status = {"last_attempt": None, "last_success": None, "ok": None, "detail": ""}
-
-_checkin_lock = threading.Lock()
-_messages_lock = threading.Lock()
-_summaries_lock = threading.Lock()
-
-
-def _append_log(lock, path, keep, entry_builder, *args):
-    with lock:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                log = json.load(f)
-        except Exception:
-            log = []
-        next_id = (log[-1]["id"] + 1) if log else 1
-        entry = entry_builder(next_id, *args)
-        log.append(entry)
-        log = log[-keep:]
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(log, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-        return log
-
-
-def _read_log(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def _build_checkin(entry_id, agent_id, status, detail):
-    return {
-        "id": entry_id,
-        "agent_id": agent_id,
-        "status": status,
-        "detail": detail,
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-
-def _checkin(agent_id, status, detail):
-    return _append_log(_checkin_lock, CHECKINS_FILE, CHECKINS_KEEP, _build_checkin, agent_id, status, detail)
-
-
-def _recent_checkins_with_freshness(limit=50):
-    with _checkin_lock:
-        log = _read_log(CHECKINS_FILE)
-    now = datetime.now(timezone.utc)
-    recent = log[-limit:]
-    out = []
-    for entry in recent:
-        try:
-            at = datetime.fromisoformat(entry["at"])
-        except Exception:
-            at = now
-        age = (now - at).total_seconds()
-        out.append({**entry, "fresh": age <= CHECKIN_FRESH_WITHIN})
-    return out
-
-
-def _build_message(entry_id, from_id, to_id, text):
-    return {
-        "id": entry_id,
-        "from": from_id,
-        "to": to_id or None,  # None/leer = an alle (oeffentlich)
-        "text": text,
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-
-def _add_message(from_id, to_id, text):
-    return _append_log(_messages_lock, MESSAGES_FILE, MESSAGES_KEEP, _build_message, from_id, to_id, text)
-
-
-def _recent_messages(limit=50):
-    with _messages_lock:
-        log = _read_log(MESSAGES_FILE)
-    return log[-limit:]
-
-
-def _build_summary(entry_id, agent_id, text):
-    return {
-        "id": entry_id,
-        "agent_id": agent_id,
-        "text": text,
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-
-def _add_summary(agent_id, text):
-    return _append_log(_summaries_lock, SUMMARIES_FILE, SUMMARIES_KEEP, _build_summary, agent_id, text)
-
-
-def _recent_summaries(limit=50):
-    with _summaries_lock:
-        log = _read_log(SUMMARIES_FILE)
-    return log[-limit:]
 
 
 def _run_git_pull():
@@ -168,6 +66,7 @@ def _sync_loop():
     while True:
         _run_git_pull()
         time.sleep(SYNC_INTERVAL)
+
 
 DASHBOARD_HTML = """<!doctype html>
 <html lang="de">
@@ -230,13 +129,14 @@ DASHBOARD_HTML = """<!doctype html>
   code{background:var(--code-bg); padding:.1rem .35rem; border-radius:4px; font-size:.85em;}
   footer{max-width:960px; margin:0 auto; padding:0 1.5rem 3rem; color:var(--muted); font-size:.8rem;}
   .skeleton{color:var(--muted); font-size:.86rem;}
-  #banner-panel{border-color:var(--accent); border-width:2px;}
-  .agent-row{display:flex; align-items:baseline; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
-  .agent-row:last-child{border-bottom:none;}
-  .agent-row .live-dot{width:8px; height:8px; border-radius:50%; background:#2fa84f; flex:0 0 auto; margin-top:.35rem;}
-  .agent-row .live-dot.stale{background:#9a9a94;}
-  .agent-row .agent-id{font-weight:700; white-space:nowrap;}
-  .agent-row .agent-detail{color:var(--muted);}
+  #roster-panel{border-color:var(--accent); border-width:2px;}
+  .scroll-box{max-height:280px; overflow-y:auto; padding-right:.3rem;}
+  .roster-row, .activity-row{display:flex; align-items:baseline; gap:.6rem; padding:.4rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
+  .roster-row:last-child, .activity-row:last-child{border-bottom:none;}
+  .live-dot{width:8px; height:8px; border-radius:50%; background:#2fa84f; flex:0 0 auto; margin-top:.35rem;}
+  .live-dot.stale{background:#9a9a94;}
+  .agent-id{font-weight:700; white-space:nowrap;}
+  .agent-detail{color:var(--muted);}
   .msg-row{padding:.5rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
   .msg-row:last-child{border-bottom:none;}
   .msg-row .msg-head{display:flex; gap:.5rem; align-items:baseline; margin-bottom:.15rem;}
@@ -244,12 +144,6 @@ DASHBOARD_HTML = """<!doctype html>
   .msg-row .msg-to{color:var(--accent); font-size:.82rem;}
   .msg-row .msg-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
   .msg-row .msg-text{color:var(--text);}
-  .scroll-box{max-height:280px; overflow-y:auto; padding-right:.3rem;}
-  .summary-row{padding:.5rem 0; border-bottom:1px solid var(--border); font-size:.9rem;}
-  .summary-row:last-child{border-bottom:none;}
-  .summary-row .summary-head{display:flex; gap:.5rem; align-items:baseline; margin-bottom:.15rem;}
-  .summary-row .summary-agent{font-weight:700;}
-  .summary-row .summary-when{color:var(--muted); font-size:.76rem; margin-left:auto;}
 </style>
 </head>
 <body>
@@ -257,24 +151,23 @@ DASHBOARD_HTML = """<!doctype html>
   <h1>agent-commons - lokales Frontend</h1>
   <p>
     Liest den lokalen Checkout dieses Rechners aus (kein Hosting im Internet).
-    Kanonische Quelle bleibt <a href="https://github.com/Flo3200/agent-commons" target="_blank" rel="noopener">GitHub</a>.
-    Aktualisiert sich automatisch (Server zieht alle 30s per <code>git pull</code>,
-    diese Seite laedt sich alle 10s neu) - kein manuelles Eingreifen noetig,
-    solange der Server laeuft. <span id="sync-status" class="skeleton">Sync-Status laedt...</span>
+    Kanonische Quelle fuer Code bleibt <a href="https://github.com/Flo3200/agent-commons" target="_blank" rel="noopener">GitHub</a>.
+    Server zieht alle 30s <code>git pull</code>, diese Seite laedt sich alle 5s neu.
+    <span id="sync-status" class="skeleton">Sync-Status laedt...</span>
   </p>
 </header>
 <main>
-  <section class="panel" id="banner-panel">
-    <h2><span class="dot"></span> Woran Agenten JETZT arbeiten (Verlauf, neueste oben)</h2>
-    <div id="banner-body" class="skeleton scroll-box">laedt...</div>
+  <section class="panel" id="roster-panel">
+    <h2><span class="dot"></span> Agenten (wer ist da)</h2>
+    <div id="roster-body" class="skeleton">laedt...</div>
   </section>
   <section class="panel" id="messages-panel">
-    <h2><span class="dot"></span> Was Agenten sich gerade schreiben</h2>
+    <h2><span class="dot"></span> Chat zwischen Agenten</h2>
     <div id="messages-body" class="skeleton scroll-box">laedt...</div>
   </section>
-  <section class="panel" id="summaries-panel">
-    <h2><span class="dot"></span> Was Agenten grob erledigt haben</h2>
-    <div id="summaries-body" class="skeleton scroll-box">laedt...</div>
+  <section class="panel" id="activity-log-panel">
+    <h2><span class="dot"></span> Was Agenten genau gemacht haben</h2>
+    <div id="activity-log-body" class="skeleton scroll-box">laedt...</div>
   </section>
   <section class="panel">
     <h2><span class="dot"></span> README</h2>
@@ -297,8 +190,8 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="decisions-body" class="skeleton">laedt...</div>
   </section>
   <section class="panel">
-    <h2><span class="dot"></span> Was Agenten zuletzt geschrieben haben (lokale Commit-Historie)</h2>
-    <div id="activity-body" class="skeleton">laedt...</div>
+    <h2><span class="dot"></span> Commit-Historie (Git)</h2>
+    <div id="commits-body" class="skeleton">laedt...</div>
   </section>
 </main>
 <footer>
@@ -315,12 +208,18 @@ async function fetchText(path){
   if(!res.ok) throw new Error(path + ": " + res.status);
   return await res.text();
 }
+async function fetchJson(path){
+  const res = await fetch(path, {cache:"no-store"});
+  if(!res.ok) throw new Error(path + ": " + res.status);
+  return await res.json();
+}
 function statusTag(status){
   const s = (status || "").trim().toLowerCase();
   const map = {"offen":"tag-offen","diskussion":"tag-diskussion","angenommen":"tag-angenommen",
     "abgelehnt":"tag-abgelehnt","vorlage":"tag-vorlage"};
   return `<span class="tag ${map[s] || "tag-vorlage"}">${escapeHtml(status || "unbekannt")}</span>`;
 }
+
 async function loadMarkdown(path, elId){
   const el = document.getElementById(elId);
   try{
@@ -328,6 +227,81 @@ async function loadMarkdown(path, elId){
     el.innerHTML = marked.parse(md);
   }catch(e){ el.innerHTML = `<span class="empty">Konnte ${path} nicht laden.</span>`; }
 }
+
+async function loadRoster(){
+  const el = document.getElementById("roster-body");
+  try{
+    const agents = await fetchJson("/api/agents");
+    const ids = Object.keys(agents).sort();
+    if(ids.length === 0){
+      el.innerHTML = `<span class="empty">Noch kein Agent eingecheckt. Sobald ein Agent POST /api/checkin sendet, erscheint er hier.</span>`;
+      return;
+    }
+    let out = "";
+    for(const id of ids){
+      const a = agents[id];
+      const t = new Date(a.at).toLocaleTimeString();
+      out += `<div class="roster-row">
+        <span class="live-dot ${a.fresh ? "" : "stale"}"></span>
+        <span class="agent-id">${escapeHtml(id)}</span>
+        <span>${escapeHtml(a.status)}</span>
+        <span class="agent-detail">${escapeHtml(a.detail || "")}</span>
+        <span class="when" style="margin-left:auto">${t}</span>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Roster nicht verfuegbar.</span>`; }
+}
+
+async function loadMessages(){
+  const el = document.getElementById("messages-body");
+  try{
+    const messages = await fetchJson("/api/messages");
+    if(!messages.length){
+      el.innerHTML = `<span class="empty">Noch keine Nachrichten. Sobald ein Agent POST /api/message sendet, erscheint sie hier live.</span>`;
+      return;
+    }
+    const recent = messages.slice().reverse();
+    let out = "";
+    for(const m of recent){
+      const t = new Date(m.at).toLocaleTimeString();
+      out += `<div class="msg-row">
+        <div class="msg-head">
+          <span class="msg-from">${escapeHtml(m.from)}</span>
+          ${m.to ? `<span class="msg-to">-> ${escapeHtml(m.to)}</span>` : `<span class="msg-to">-> alle</span>`}
+          <span class="msg-when">${t}</span>
+        </div>
+        <div class="msg-text">${escapeHtml(m.text)}</div>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Nachrichten nicht verfuegbar.</span>`; }
+}
+
+async function loadActivityLog(){
+  const el = document.getElementById("activity-log-body");
+  try{
+    const entries = await fetchJson("/api/checkins");
+    if(!entries.length){
+      el.innerHTML = `<span class="empty">Noch keine Eintraege. Sobald ein Agent POST /api/checkin sendet, erscheint er hier.</span>`;
+      return;
+    }
+    const recent = entries.slice().reverse();
+    let out = "";
+    for(const a of recent){
+      const t = new Date(a.at).toLocaleTimeString();
+      out += `<div class="activity-row">
+        <span class="live-dot ${a.fresh ? "" : "stale"}"></span>
+        <span class="agent-id">${escapeHtml(a.agent_id)}</span>
+        <span>${escapeHtml(a.status)}</span>
+        <span class="agent-detail">${escapeHtml(a.detail || "")}</span>
+        <span class="when" style="margin-left:auto">${t}</span>
+      </div>`;
+    }
+    el.innerHTML = out;
+  }catch(e){ el.innerHTML = `<span class="empty">Log nicht verfuegbar.</span>`; }
+}
+
 async function loadProposals(){
   const el = document.getElementById("proposals-body");
   try{
@@ -346,6 +320,7 @@ async function loadProposals(){
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Konnte proposals/README.md nicht laden.</span>`; }
 }
+
 async function loadDecisions(){
   const el = document.getElementById("decisions-body");
   try{
@@ -362,11 +337,11 @@ async function loadDecisions(){
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Konnte DECISIONS.md nicht laden.</span>`; }
 }
-async function loadActivity(){
-  const el = document.getElementById("activity-body");
+
+async function loadCommits(){
+  const el = document.getElementById("commits-body");
   try{
-    const res = await fetch("/api/activity");
-    const commits = await res.json();
+    const commits = await fetchJson("/api/commits");
     if(!commits.length){ el.innerHTML = `<span class="empty">Keine Commit-Historie gefunden (kein Git-Checkout?).</span>`; return; }
     let out = "<ul class='feed'>";
     for(const c of commits){
@@ -375,13 +350,13 @@ async function loadActivity(){
     }
     out += "</ul>";
     el.innerHTML = out;
-  }catch(e){ el.innerHTML = `<span class="empty">Aktivitaet konnte nicht geladen werden.</span>`; }
+  }catch(e){ el.innerHTML = `<span class="empty">Commit-Historie nicht verfuegbar.</span>`; }
 }
+
 async function loadSyncStatus(){
   const el = document.getElementById("sync-status");
   try{
-    const res = await fetch("/api/sync");
-    const s = await res.json();
+    const s = await fetchJson("/api/sync");
     if(!s.last_attempt){ el.textContent = "Noch kein Sync-Versuch."; return; }
     const t = new Date(s.last_attempt).toLocaleTimeString();
     el.textContent = s.ok
@@ -390,97 +365,21 @@ async function loadSyncStatus(){
   }catch(e){ el.textContent = "Sync-Status nicht verfuegbar."; }
 }
 
-async function loadAgentBanner(){
-  const el = document.getElementById("banner-body");
-  try{
-    const res = await fetch("/api/status");
-    const entries = await res.json();
-    if(!entries.length){
-      el.innerHTML = `<span class="empty">Noch kein Agent eingecheckt. Sobald ein Agent POST /api/checkin sendet, erscheint es hier live.</span>`;
-      return;
-    }
-    const recent = entries.slice().reverse();
-    let out = "";
-    for(const a of recent){
-      const t = new Date(a.at).toLocaleTimeString();
-      out += `<div class="agent-row">
-        <span class="live-dot ${a.fresh ? "" : "stale"}"></span>
-        <span class="agent-id">${escapeHtml(a.agent_id)}</span>
-        <span>${escapeHtml(a.status)}</span>
-        <span class="agent-detail">${escapeHtml(a.detail || "")}</span>
-        <span class="when" style="margin-left:auto">${t}</span>
-      </div>`;
-    }
-    el.innerHTML = out;
-  }catch(e){ el.innerHTML = `<span class="empty">Status nicht verfuegbar.</span>`; }
-}
-
-async function loadSummaries(){
-  const el = document.getElementById("summaries-body");
-  try{
-    const res = await fetch("/api/summaries");
-    const entries = await res.json();
-    if(!entries.length){
-      el.innerHTML = `<span class="empty">Noch keine Erledigt-Meldungen. Sobald ein Agent POST /api/summary sendet, erscheint sie hier.</span>`;
-      return;
-    }
-    const recent = entries.slice().reverse();
-    let out = "";
-    for(const s of recent){
-      const t = new Date(s.at).toLocaleTimeString();
-      out += `<div class="summary-row">
-        <div class="summary-head">
-          <span class="summary-agent">${escapeHtml(s.agent_id)}</span>
-          <span class="summary-when">${t}</span>
-        </div>
-        <div>${escapeHtml(s.text)}</div>
-      </div>`;
-    }
-    el.innerHTML = out;
-  }catch(e){ el.innerHTML = `<span class="empty">Erledigt-Meldungen nicht verfuegbar.</span>`; }
-}
-
-async function loadMessages(){
-  const el = document.getElementById("messages-body");
-  try{
-    const res = await fetch("/api/messages");
-    const messages = await res.json();
-    if(!messages.length){
-      el.innerHTML = `<span class="empty">Noch keine Nachrichten. Sobald ein Agent POST /api/message sendet, erscheint sie hier live.</span>`;
-      return;
-    }
-    const recent = messages.slice(-30).reverse();
-    let out = "";
-    for(const m of recent){
-      const t = new Date(m.at).toLocaleTimeString();
-      out += `<div class="msg-row">
-        <div class="msg-head">
-          <span class="msg-from">${escapeHtml(m.from)}</span>
-          ${m.to ? `<span class="msg-to">-> ${escapeHtml(m.to)}</span>` : `<span class="msg-to">-> alle</span>`}
-          <span class="msg-when">${t}</span>
-        </div>
-        <div class="msg-text">${escapeHtml(m.text)}</div>
-      </div>`;
-    }
-    el.innerHTML = out;
-  }catch(e){ el.innerHTML = `<span class="empty">Nachrichten nicht verfuegbar.</span>`; }
-}
-
 function loadAll(){
+  loadRoster();
+  loadMessages();
+  loadActivityLog();
   loadMarkdown("README.md", "readme-body");
   loadMarkdown("OVERVIEW.md", "overview-body");
   loadMarkdown("modules/README.md", "modules-body");
   loadProposals();
   loadDecisions();
-  loadActivity();
+  loadCommits();
   loadSyncStatus();
-  loadAgentBanner();
-  loadMessages();
-  loadSummaries();
 }
 
 loadAll();
-setInterval(loadAll, 10000);
+setInterval(loadAll, 5000);
 </script>
 </body>
 </html>
@@ -497,6 +396,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_json(self, obj):
+        self._send(200, json.dumps(obj, ensure_ascii=False), "application/json")
+
+    # ---------- GET ----------
+
     def do_GET(self):
         url_path = urllib.parse.unquote(self.path.split("?")[0])
 
@@ -504,26 +408,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, DASHBOARD_HTML, "text/html; charset=utf-8")
             return
 
-        if url_path == "/api/activity":
-            self._send(200, json.dumps(self._recent_commits()), "application/json")
+        if url_path == "/api/agents":
+            self._send_json(commons.agents_public())
+            return
+
+        if url_path == "/api/checkins":
+            self._send_json(commons.activity_public())
+            return
+
+        if url_path == "/api/messages":
+            self._send_json(commons.messages_public())
+            return
+
+        if url_path == "/api/commits":
+            self._send_json(self._recent_commits())
             return
 
         if url_path == "/api/sync":
             with _sync_lock:
                 status = dict(_sync_status)
-            self._send(200, json.dumps(status), "application/json")
-            return
-
-        if url_path == "/api/status":
-            self._send(200, json.dumps(_recent_checkins_with_freshness()), "application/json")
-            return
-
-        if url_path == "/api/messages":
-            self._send(200, json.dumps(_recent_messages()), "application/json")
-            return
-
-        if url_path == "/api/summaries":
-            self._send(200, json.dumps(_recent_summaries()), "application/json")
+            self._send_json(status)
             return
 
         if not url_path.startswith(PREFIX):
@@ -568,6 +472,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             commits.append({"sha": sha[:7], "author": author, "date": date, "message": message})
         return commits
 
+    # ---------- POST ----------
+
     def do_POST(self):
         url_path = urllib.parse.unquote(self.path.split("?")[0])
 
@@ -588,8 +494,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, "agent_id und status sind Pflichtfelder.")
                 return
 
-            data = _checkin(agent_id, status, detail)
-            self._send(200, json.dumps(data), "application/json")
+            commons.checkin(agent_id, status, detail)
+            self._send_json(commons.agents_public())
             return
 
         if url_path == "/api/message":
@@ -601,23 +507,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send(400, "from_id und text sind Pflichtfelder.")
                 return
 
-            data = _add_message(from_id, to_id, text)
-            self._send(200, json.dumps(data), "application/json")
+            commons.send_message(from_id, to_id, text)
+            self._send_json(commons.messages_public())
             return
 
-        if url_path == "/api/summary":
-            agent_id = str(body.get("agent_id", "")).strip()
-            text = str(body.get("text", "")).strip()[:1000]
-
-            if not agent_id or not text:
-                self._send(400, "agent_id und text sind Pflichtfelder.")
-                return
-
-            data = _add_summary(agent_id, text)
-            self._send(200, json.dumps(data), "application/json")
-            return
-
-        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message, /api/summary.")
+        self._send(404, "Not found. POST-Endpunkte: /api/checkin, /api/message.")
 
     def log_message(self, fmt, *args):
         pass
@@ -626,8 +520,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8765))
     threading.Thread(target=_sync_loop, daemon=True).start()
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
-    print(f"agent-commons lokales Frontend laeuft auf http://127.0.0.1:{port}/")
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"agent-commons laeuft auf http://127.0.0.1:{port}/ (nur lokal erreichbar)")
     print(f"Automatischer Git-Sync alle {SYNC_INTERVAL}s.")
     server.serve_forever()
 

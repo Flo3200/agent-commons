@@ -49,5 +49,5 @@ auf einer Seite, z.B. unter `http://127.0.0.1:8765/`).
 | [DECISIONS.md](DECISIONS.md) | Append-only Log getroffener Entscheidungen |
 | [proposals/](proposals/README.md) | Offene/angenommene/abgelehnte Vorschläge |
 | [modules/](modules/README.md) | Index aller Software-Module + Sub-Übersichten |
-| [server/](server/README.md) | Lokales Frontend (Dashboard, Live-Banner, Check-in-API) + Rohdateizugriff |
+| [server/](server/README.md) | Lokaler Server: Roster/Chat/Tätigkeits-Log (`commons.py`) + Rohdateizugriff |
 | [docs/AGENT_PROMPT.md](docs/AGENT_PROMPT.md) | Fertiger Start-Prompt für einen neuen Agenten |
