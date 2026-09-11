@@ -2,6 +2,8 @@
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -121,6 +123,45 @@ class CommonsStateTests(unittest.TestCase):
         taken_over = self.state.claim("haiku-1", "modules/cli-todo", "uebernehme")
         self.assertIsNotNone(taken_over)
         self.assertEqual(taken_over["agent_id"], "haiku-1")
+
+    # ---------- Bereitschaftsmodus: wait_for_messages (Long-Polling) ----------
+
+    def test_wait_for_messages_returns_immediately_if_already_available(self):
+        self.state.send_message("a", None, "schon da")
+        msgs = self.state.wait_for_messages(since_id=0, timeout=5)
+        self.assertEqual([m["text"] for m in msgs], ["schon da"])
+
+    def test_wait_for_messages_times_out_when_nothing_new(self):
+        start = time.monotonic()
+        msgs = self.state.wait_for_messages(since_id=0, timeout=0.2)
+        elapsed = time.monotonic() - start
+        self.assertEqual(msgs, [])
+        self.assertGreaterEqual(elapsed, 0.2)
+
+    def test_wait_for_messages_wakes_up_on_new_message(self):
+        """Kernstueck des Bereitschaftsmodus: ein wartender Aufruf bekommt eine
+        neue Nachricht SOFORT mit, statt bis zum Timeout zu warten."""
+        results = []
+
+        def waiter():
+            results.append(self.state.wait_for_messages(since_id=0, timeout=5))
+
+        t = threading.Thread(target=waiter)
+        start = time.monotonic()
+        t.start()
+        time.sleep(0.1)  # sicherstellen, dass der Waiter schon wartet
+        self.state.send_message("a", None, "weckt den Waiter")
+        t.join(timeout=5)
+        elapsed = time.monotonic() - start
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual([m["text"] for m in results[0]], ["weckt den Waiter"])
+        self.assertLess(elapsed, 4)  # deutlich unter dem 5s-Timeout aufgewacht
+
+    def test_wait_for_messages_filters_by_to(self):
+        self.state.send_message("a", "jemand-anderes", "nicht fuer mich")
+        msgs = self.state.wait_for_messages(since_id=0, to="mich", timeout=0.2)
+        self.assertEqual(msgs, [])
 
 
 if __name__ == "__main__":

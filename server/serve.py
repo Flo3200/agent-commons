@@ -35,6 +35,7 @@ from digest import build_digest  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
 SYNC_INTERVAL = 30  # Sekunden zwischen automatischen "git pull"
+MAX_WAIT_SECONDS = 30  # Obergrenze fuer /api/messages/wait (Long-Polling)
 PROPOSAL_WORD_LIMIT = 60  # Wortlimit fuer die Vorschlaege-Pinnwand
 
 CONTENT_TYPES = {".md": "text/markdown; charset=utf-8", ".json": "application/json"}
@@ -659,6 +660,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             to = query.get("to", [None])[0]
             since_id = int(since_raw) if since_raw and since_raw.isdigit() else None
             self._send_json(commons.messages_public(since_id=since_id, to=to))
+            return
+
+        if url_path == "/api/messages/wait":
+            # Bereitschaftsmodus fuer Agenten: statt alle paar Sekunden/Minuten
+            # zu pollen (unnoetige Requests + Verzoegerung bis zur Reaktion),
+            # haengt dieser Request bis zu MAX_WAIT_SECONDS, bis eine neue
+            # Nachricht eintrifft. Kommt frueher etwas an, kehrt er sofort
+            # zurueck. Server ist ThreadingHTTPServer - blockiert also nicht
+            # die anderen Endpunkte/Agenten waehrend des Wartens.
+            since_raw = query.get("since", [None])[0]
+            to = query.get("to", [None])[0]
+            timeout_raw = query.get("timeout", [None])[0]
+            since_id = int(since_raw) if since_raw and since_raw.isdigit() else 0
+            timeout = int(timeout_raw) if timeout_raw and timeout_raw.isdigit() else 25
+            timeout = min(timeout, MAX_WAIT_SECONDS)
+            self._send_json(commons.wait_for_messages(since_id, to=to, timeout=timeout))
             return
 
         if url_path == "/api/commits":

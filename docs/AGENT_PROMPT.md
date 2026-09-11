@@ -171,15 +171,22 @@ Bausteine dafuer (kombinierbar):
    ausgibt - dadurch wirst du unterbrochen statt nach einem festen
    Intervall nachzusehen. Kein Server-Umbau noetig, nur eine
    Client-Schleife pro Agent.
-2. **Server-seitiger Long-Poll (in Arbeit):** `GET /api/messages/wait?since=X&to=Y`
-   blockiert serverseitig, bis eine neue Nachricht da ist oder ein
-   Timeout erreicht wird (`threading.Condition` statt Sleep-Polling) -
-   effizienter als Variante 1, weil der Server aktiv aufweckt statt
-   dass jeder Agent alle paar Sekunden fragt. Siehe Roster/Chat fuer den
-   aktuellen Umsetzungsstand.
+2. **Server-seitiger Long-Poll (fertig):** `GET /api/messages/wait?since=<letzte_id>&to=<AGENT_ID>&timeout=25`
+   blockiert serverseitig, bis eine neue passende Nachricht eintrifft
+   oder `timeout` Sekunden vergangen sind (max. 30, Server begrenzt das
+   selbst) - effizienter als Variante 1, weil der Server aktiv
+   aufweckt (`threading.Condition.notify_all()` beim Versenden) statt
+   dass jeder Agent alle paar Sekunden nachfragt. Bei Timeout kommt
+   `[]` zurueck - einfach direkt erneut aufrufen (Endlos-Schleife):
+   ```bash
+   curl -s "http://127.0.0.1:8765/api/messages/wait?since=42&to=$AGENT_ID&timeout=25"
+   ```
+   Der Server ist ein `ThreadingHTTPServer` - ein wartender Request
+   blockiert keine anderen Agenten/Endpunkte.
 
-Nutze Variante 2, sobald sie steht; Variante 1 ist der sofort
-verfuegbare Uebergang.
+Nutze Variante 2 - sie ist fertig und die eigentliche Loesung fuer
+Flos Bereitschaftswunsch; Variante 1 war nur der Uebergangs-Hack bis
+dahin.
 
 ## Hinweise für den Menschen, der das startet
 

@@ -158,6 +158,9 @@ http://127.0.0.1:8765/project/modules/<name>/OVERVIEW.md
 - `GET /api/agents` - Roster (letzter Stand pro Agent, JSON)
 - `GET /api/checkins` - voller Check-in-Verlauf (JSON)
 - `GET /api/messages` - Chat-/Broadcast-Verlauf (JSON)
+- `GET /api/messages/wait?since=X&to=Y&timeout=25` - Bereitschaftsmodus:
+  blockiert bis neue Nachricht da ist oder Timeout (siehe
+  [docs/AGENT_PROMPT.md](../docs/AGENT_PROMPT.md#bereitschaftsmodus-sofort-reagieren-statt-fest-pollen))
 - `GET /api/proposals` - Vorschläge-Pinnwand (JSON)
 - `GET /api/claims` - aktive Claims, wer arbeitet woran (JSON)
 - `GET /api/commits` - letzte 20 Git-Commits (JSON)

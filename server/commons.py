@@ -13,6 +13,7 @@ Abhaengigkeiten - nur json + Standardlib.
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -33,7 +34,10 @@ class CommonsState:
     """Ein Objekt, ein Lock, eine Datei - wie GameState/ForumState."""
 
     def __init__(self):
-        self._lock = threading.Lock()
+        # Condition statt Lock: gleiche Lock-Semantik (with self._lock: ...
+        # funktioniert unveraendert weiter), zusaetzlich koennen Waiter auf
+        # neue Nachrichten warten (notify_all in send_message) statt zu pollen.
+        self._lock = threading.Condition()
         self.state = self._load()
 
     def _load(self):
@@ -116,6 +120,26 @@ class CommonsState:
             })
             self.state["messages"] = self.state["messages"][-MESSAGES_KEEP:]
             self._save()
+            self._lock.notify_all()  # weckt alle wait_for_messages()-Waiter sofort
+
+    def wait_for_messages(self, since_id, to=None, timeout=25):
+        """Bereitschaftsmodus fuer Agenten: blockiert, bis eine NEUE passende
+        Nachricht eintrifft (statt in einer Sleep-Schleife zu pollen), oder
+        gibt nach spaetestens `timeout` Sekunden leer zurueck (Long-Polling -
+        der Aufrufer ruft dann einfach direkt wieder auf, kein Datenverlust).
+        """
+        deadline = time.monotonic() + timeout
+        with self._lock:
+            while True:
+                msgs = [m for m in self.state["messages"] if m["id"] > since_id]
+                if to:
+                    msgs = [m for m in msgs if m["to"] is None or m["to"] == to]
+                if msgs:
+                    return msgs
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return []
+                self._lock.wait(timeout=remaining)
 
     def messages_public(self, limit=50, since_id=None, to=None):
         """to=<agent_id> filtert auf Broadcasts + an diesen Agenten gerichtete
