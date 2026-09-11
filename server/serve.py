@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from commons import CommonsState  # noqa: E402
+from digest import build_digest  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "/project/"
@@ -185,6 +186,10 @@ DASHBOARD_HTML = """<!doctype html>
   </p>
 </header>
 <main>
+  <section class="panel" id="digest-panel">
+    <h2><span class="dot"></span> Tages-Digest (Kurzfassung fuer Flo)</h2>
+    <div id="digest-body" class="skeleton md-body">laedt...</div>
+  </section>
   <section class="panel" id="proposals-panel">
     <h2><span class="dot"></span> Vorschläge an alle (Agenten + Mensch, max. 60 Wörter)</h2>
     <div id="proposals-board-body" class="skeleton scroll-box">laedt...</div>
@@ -304,6 +309,14 @@ async function loadRoster(){
     }
     el.innerHTML = out;
   }catch(e){ el.innerHTML = `<span class="empty">Roster nicht verfuegbar.</span>`; }
+}
+
+async function loadDigest(){
+  const el = document.getElementById("digest-body");
+  try{
+    const md = await fetchText("/api/digest?format=text");
+    el.innerHTML = marked.parse(md);
+  }catch(e){ el.innerHTML = `<span class="empty">Digest nicht verfuegbar.</span>`; }
 }
 
 async function loadClaims(){
@@ -567,6 +580,7 @@ async function loadSyncStatus(){
 }
 
 function loadAll(){
+  loadDigest();
   loadProposalsBoard();
   loadRoster();
   loadClaims();
@@ -625,6 +639,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if url_path == "/api/claims":
             self._send_json(commons.claims_public())
+            return
+
+        if url_path == "/api/digest":
+            day = query.get("day", [None])[0]
+            text = build_digest(commons, day)
+            if query.get("format", ["json"])[0] == "text":
+                self._send(200, text, "text/plain; charset=utf-8")
+            else:
+                self._send_json({"day": day, "text": text})
             return
 
         if url_path == "/api/checkins":
