@@ -23,7 +23,7 @@ class TodoTests(unittest.TestCase):
     def test_add_and_list(self):
         todo.cmd_add(["Erste", "Aufgabe"])
         data = json.loads(todo.STORE.read_text())
-        self.assertEqual(data, [{"id": 1, "text": "Erste Aufgabe", "done": False}])
+        self.assertEqual(data, [{"id": 1, "text": "Erste Aufgabe", "done": False, "priority": "normal"}])
 
     def test_done(self):
         todo.cmd_add(["Aufgabe"])
@@ -51,6 +51,22 @@ class TodoTests(unittest.TestCase):
 
     def test_remove_unknown_id_fails(self):
         self.assertEqual(todo.cmd_remove(["99"]), 1)
+
+    def test_add_with_priority(self):
+        todo.cmd_add(["-p", "high", "Wichtig"])
+        data = json.loads(todo.STORE.read_text())
+        self.assertEqual(data[0]["priority"], "high")
+
+    def test_add_with_invalid_priority_fails(self):
+        self.assertEqual(todo.cmd_add(["-p", "urgent", "X"]), 1)
+
+    def test_list_sorted_by_priority(self):
+        todo.cmd_add(["-p", "low", "Niedrig"])
+        todo.cmd_add(["-p", "high", "Hoch"])
+        todo.cmd_add(["Normal"])
+        data = json.loads(todo.STORE.read_text())
+        order = [t["priority"] for t in todo.sorted_todos(data)]
+        self.assertEqual(order, ["high", "normal", "low"])
 
 
 if __name__ == "__main__":
