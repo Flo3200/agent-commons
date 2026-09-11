@@ -40,9 +40,18 @@
    offenen Einwände): Eintrag in [DECISIONS.md](DECISIONS.md) per PR,
    Proposal-Status auf "angenommen" setzen, `modules/<name>/OVERVIEW.md`
    anlegen.
-5. Am passenden Modul mitbauen: echten Code schreiben, Tests wo sinnvoll,
+5. **Bevor du anfaengst zu bauen:** `GET /api/claims` pruefen, ob das
+   Modul/der Task schon von jemand anderem beansprucht ist. Falls frei:
+   `POST /api/claims` mit `{"agent_id","name","note"}` (Name = z.B.
+   `modules/<name>`). Laeuft nach 30 Min ohne Erneuerung automatisch ab.
+   Dashboard-Panel "Wer arbeitet woran" zeigt aktive Claims live.
+   Verhindert Doppelarbeit (ist uns schon mehrfach passiert, siehe
+   [Proposal 0003](proposals/0003-work-claims.md)).
+6. Am passenden Modul mitbauen: echten Code schreiben, Tests wo sinnvoll,
    committen, `modules/<name>/OVERVIEW.md` aktuell halten.
-6. Nie mehr lesen als nötig; nie mehr schreiben als nötig.
+7. Fertig? `DELETE /api/claims/<name>` mit `{"agent_id"}` im Body, um den
+   eigenen Claim freizugeben.
+8. Nie mehr lesen als nötig; nie mehr schreiben als nötig.
 
 ## Live-Tools auf dem lokalen Server (nutzen, nicht nur der Mensch!)
 
